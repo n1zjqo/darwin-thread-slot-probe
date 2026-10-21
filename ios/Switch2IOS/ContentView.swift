@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject private var session: SessionModel
     @State private var showsImporter = false
+    @State private var selectedModule = ""
+    @State private var modelBaseText = ""
 
     var body: some View {
         NavigationView {
@@ -74,6 +76,40 @@ struct ContentView: View {
                             Button("关闭诊断对象") { session.closeLoadedInspection() }
                         }
                     }
+                    if let source = session.loadedInspection {
+                        Section(header: Text("单模块布局模型（私有数据，不执行）")) {
+                            Text("从已持有模块复制三个稀疏段、补零 BSS，并仅处理受支持的本地重定位。未知元数据、依赖及导入会拒绝；这不是完整链接器，也不会调用初始化函数。")
+                                .font(.footnote)
+                            Picker("源模块", selection: $selectedModule) {
+                                Text("请选择模块").tag("")
+                                ForEach(source.modules) { Text($0.name).tag($0.name) }
+                            }.disabled(session.isPreparing)
+                            TextField("虚拟基址：0x + 十六进制数", text: $modelBaseText)
+                                .textInputAutocapitalization(.never).disableAutocorrection(true)
+                                .disabled(session.isPreparing)
+                            Text("必须显式填写并按 4096 字节对齐。此数仅是布局模型参数，不是真实游戏基址、主机地址或可调用入口。")
+                                .font(.caption).foregroundColor(.secondary)
+                            Text("每次准备先释放旧模型，源诊断对象保留；准备失败不会恢复旧模型。全部源对象、新模型、临时计划及报告预留共享 96 MiB 预算，并非进程 RSS 上限。")
+                                .font(.caption).foregroundColor(.secondary)
+                            if session.isPreparing {
+                                ProgressView("正在准备私有布局数据…")
+                                Button("取消准备（保留源对象）") { session.cancelPreparation() }
+                            } else {
+                                Button("准备布局模型（替换旧模型）") {
+                                    session.prepareSelectedModule(selectedModule, baseText: modelBaseText)
+                                }.disabled(selectedModule.isEmpty)
+                            }
+                            if let report = session.preparedInspection {
+                                Text("\(report.moduleName)：虚拟基址 0x\(String(report.guestBase, radix: 16))")
+                                    .font(.footnote)
+                                Text("模型数据 \(report.imageBytes) 字节；原生持有 \(report.ownedBytes) 字节；创建期间临时计划 \(report.temporaryBytes) 字节（现已释放）；合计创建峰值 \(report.creationPeakBytes) 字节。")
+                                    .font(.caption)
+                                Text("重定位 \(report.relocationCount)：RELATIVE \(report.relativeCount)，ABS64 \(report.absoluteCount)。初始化记录：\(report.hasInitializer ? "存在，仅记录，未调用" : "无")。仍不可运行游戏。")
+                                    .font(.footnote)
+                                Button("关闭布局模型（保留源对象）") { session.cancelPreparation() }
+                            }
+                        }
+                    }
                     Section(header: Text("段内容校验（不执行代码）")) {
                         Text("手动开始后，逐模块解压并校验 NSO 文件头要求的 SHA-256。未启用哈希的段不会被标记为已校验哈希。单文件最多 64 MiB，文件与一个解压段合计最多 96 MiB。校验成功也不证明游戏身份或可运行性。")
                             .font(.footnote)
@@ -111,5 +147,9 @@ struct ContentView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .onChange(of: session.loadedInspection) { _ in
+            selectedModule = ""
+            modelBaseText = ""
+        }
     }
 }

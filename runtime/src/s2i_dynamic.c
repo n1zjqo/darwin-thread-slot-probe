@@ -292,7 +292,61 @@ const char *s2i_dynamic_status_string(s2i_dynamic_status s) {
             return "metadata resource limit";
         case S2I_DYNAMIC_BUFFER_TOO_SMALL:
             return "inventory output capacity insufficient";
+        case S2I_DYNAMIC_UNSUPPORTED_METADATA:
+            return "metadata outside strict preparation subset";
         default:
             return "unknown dynamic status";
     }
+}
+
+s2i_dynamic_status s2i_dynamic_inspect_relocations(const s2i_nso_plan *plan,
+    const s2i_dynamic_bytes decoded[3], s2i_dynamic_relocations *out) {
+    s2i_dynamic_report inventory;
+    s2i_dynamic_relocations result;
+    s2i_dynamic_status status;
+    uint64_t rela = 0, size = 0, entry = 0;
+    unsigned present = 0;
+    size_t i;
+    if (!out)
+        return S2I_DYNAMIC_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    memset(&result, 0, sizeof(result));
+    status = s2i_dynamic_inspect(plan, decoded, NULL, 0, NULL, 0, &inventory);
+    if (status != S2I_DYNAMIC_OK && status != S2I_DYNAMIC_BUFFER_TOO_SMALL)
+        return status;
+    if (inventory.warnings & S2I_DYNAMIC_NO_MOD0)
+        return S2I_DYNAMIC_UNSUPPORTED_METADATA;
+    for (i = 0; i < inventory.dynamic_entries; ++i) {
+        const uint8_t *item = range(plan, decoded,
+            inventory.dynamic_address + (uint64_t)i * 16, 16);
+        uint64_t tag, value;
+        if (!item)
+            return S2I_DYNAMIC_INVALID_RANGE;
+        tag = u64(item);
+        value = u64(item + 8);
+        switch (tag) {
+        case 4: case 5: case 6: case 10: case 11: case 14: case 39:
+            break; /* Existing inspector already validates these metadata tags. */
+        case 7: rela = value; present |= 1; break;
+        case 8: size = value; present |= 2; break;
+        case 9: entry = value; present |= 4; break;
+        case 12: result.has_init = 1; result.init_offset = value; break;
+        default: return S2I_DYNAMIC_UNSUPPORTED_METADATA;
+        }
+    }
+    if (present) {
+        if (present != 7 || entry != 24 || size % 24 || rela % 8)
+            return S2I_DYNAMIC_INVALID_FORMAT;
+        if (size / 24 > S2I_DYNAMIC_MAX_RELOCATIONS || size > SIZE_MAX)
+            return S2I_DYNAMIC_RESOURCE_LIMIT;
+        result.rela.bytes = range(plan, decoded, rela, size);
+        if (!result.rela.bytes)
+            return S2I_DYNAMIC_INVALID_RANGE;
+        result.has_rela = 1;
+        result.rela_address = rela;
+        result.rela.size = (size_t)size;
+        result.relocation_count = (size_t)(size / 24);
+    }
+    *out = result;
+    return S2I_DYNAMIC_OK;
 }

@@ -10,9 +10,9 @@ concurrency:
 jobs:
   loader:
     if: github.event_name == 'push' && github.repository == 'n1zjqo/darwin-thread-slot-probe' && github.event.repository.private
-      == false && github.ref == 'refs/heads/main' && github.run_number == 2 && github.run_attempt == 1
-      && github.event.before == 'a5cbf78b7a42776ee516710f0730dc5f801c0c1e' && contains(github.event.head_commit.message,
-      '[approved-loader-apple-retry2-20261021]')
+      == false && github.ref == 'refs/heads/main' && github.run_number == 3 && github.run_attempt == 1
+      && github.event.before == '58e461e3c8b94daf3b4000c65db954c3667c6161' && contains(github.event.head_commit.message,
+      '[approved-prepared-apple-once3-20261021]')
     runs-on: macos-15
     timeout-minutes: 20
     defaults:
@@ -37,10 +37,10 @@ jobs:
         python3 - <<'PY'
         import os, subprocess, hashlib
         from pathlib import Path
-        base = 'a5cbf78b7a42776ee516710f0730dc5f801c0c1e'
+        base = '58e461e3c8b94daf3b4000c65db954c3667c6161'
         sha = os.environ['GITHUB_SHA']
         original = {'thread-context/include/thread_context.h', 'thread-context/Makefile', 'thread-context/README.md', '.github/workflows/context-once.yml', 'thread-context/.gitignore', 'thread-context/tests/test_slot_candidate.c', 'thread-context/tests/test_cpp_linkage.cpp', 'thread-context/docs/INTEGRATION_GATES.md', 'README.md', 'thread-context/src/thread_context.c', 'probe.c', 'thread-context/review-tests/stress.c', '.github/workflows/probe-once.yml', 'thread-context/src/slot_candidate.h', 'thread-context/review-tests/cpp_backend.cpp', 'slot_contract.h', 'thread-context/include/thread_context_backend.h', 'thread-context/review-tests/run_review.sh', 'test_slot_contract.c', 'thread-context/docs/VALIDATION.md', 'thread-context/tests/test_thread_context.c', 'thread-context/review-tests/README.md', 'thread-context/review-tests/cancel_transition.c'}
-        additions = {'ios/Switch2IOSTests/InputInventoryTests.swift', 'ios/Switch2IOS.xcodeproj/xcshareddata/xcschemes/Switch2IOS.xcscheme', 'runtime/src/s2i_module.c', 'ios/Switch2IOS/InputInventory.swift', 'ios/Switch2IOSTests/LoadedInspectionTests.swift', 'runtime/src/s2i_nso.c', 'ios/Switch2IOS/Info.plist', 'ios/Switch2IOS/LoadedInspection.swift', 'runtime/include/s2i_dynamic.h', 'runtime/include/s2i_nso.h', '.github/workflows/loader-apple-once.yml', 'ios/Switch2IOS/Switch2IOSApp.swift', 'runtime/include/s2i_module.h', 'ios/Switch2IOS/RuntimeBridge.h', 'ios/Switch2IOS.xcodeproj/project.pbxproj', 'ios/Switch2IOS/ContentView.swift', 'ios/Switch2IOS/SessionModel.swift', 'ios/Switch2IOS/PayloadValidator.swift', 'runtime/src/s2i_dynamic.c'}
+        additions = {'runtime/include/s2i_module.h', 'runtime/include/s2i_dynamic.h', 'runtime/src/s2i_prepared.c', 'ios/Switch2IOS/Switch2IOSApp.swift', 'ios/Switch2IOS.xcodeproj/project.pbxproj', 'ios/Switch2IOS/RuntimeBridge.h', 'runtime/src/s2i_nso.c', 'runtime/src/s2i_dynamic.c', 'ios/Switch2IOS/ContentView.swift', 'ios/Switch2IOS/Info.plist', 'ios/Switch2IOS/SessionModel.swift', 'runtime/include/s2i_prepared.h', 'ios/Switch2IOSTests/InputInventoryTests.swift', '.github/workflows/loader-apple-once.yml', 'ios/Switch2IOS/InputInventory.swift', 'ios/Switch2IOSTests/PreparedInspectionTests.swift', 'ios/Switch2IOS/PayloadValidator.swift', 'runtime/src/s2i_module.c', 'ios/Switch2IOS/PreparedInspection.swift', 'ios/Switch2IOS.xcodeproj/xcshareddata/xcschemes/Switch2IOS.xcscheme', 'runtime/include/s2i_nso.h', 'ios/Switch2IOS/LoadedInspection.swift', 'ios/Switch2IOSTests/LoadedInspectionTests.swift'}
         def git(*args):
             return subprocess.check_output(['git', *args])
         if git('rev-list', '--parents', '-n', '1', sha).decode().split() != [sha, base]:
@@ -48,17 +48,17 @@ jobs:
         expected = original | additions
         entries = [e for e in git('ls-tree', '-r', '-z', sha).split(b'\0') if e]
         actual = {e.split(b'\t', 1)[1].decode() for e in entries}
-        if actual != expected or len(entries) != 42:
-            raise SystemExit('Expected exactly 42 approved source files.')
-        if set(git('diff', '--name-status', '--no-renames', base, sha).decode().splitlines()) != {'M\t.github/workflows/loader-apple-once.yml'}:
-            raise SystemExit('Only the existing approved loader workflow may change.')
+        if actual != expected or len(entries) != 46:
+            raise SystemExit('Expected exactly 46 approved source files.')
+        if set(git('diff', '--name-status', '--no-renames', base, sha).decode().splitlines()) != {'A\tios/Switch2IOSTests/PreparedInspectionTests.swift', 'A\tios/Switch2IOS/PreparedInspection.swift', 'M\tios/Switch2IOS/RuntimeBridge.h', 'M\tios/Switch2IOS.xcodeproj/project.pbxproj', 'A\truntime/include/s2i_prepared.h', 'M\t.github/workflows/loader-apple-once.yml', 'M\tios/Switch2IOS/SessionModel.swift', 'A\truntime/src/s2i_prepared.c', 'M\tios/Switch2IOS/ContentView.swift', 'M\truntime/include/s2i_dynamic.h', 'M\tios/Switch2IOS/LoadedInspection.swift', 'M\truntime/src/s2i_dynamic.c'}:
+            raise SystemExit('Only the exact four additions and approved modifications may change.')
         if any(e.split(b' ', 1)[0] not in (b'100644', b'100755') for e in entries):
             raise SystemExit('Non-regular source entry.')
-        source_hashes = {'ios/Switch2IOS.xcodeproj/project.pbxproj': 'bccdac3967f28a0553c5cd91319f7fef29375cc5971d7c24faa35f9614b195df', 'ios/Switch2IOS.xcodeproj/xcshareddata/xcschemes/Switch2IOS.xcscheme': 'a2f7b889b8f09938592fa074464556f7e8a42ed3294d2d61164fd1e3eaf02dcc', 'ios/Switch2IOS/ContentView.swift': '311b044c15219818bbd11bdf1214683339ac1e1af2b031139610b2777e9d2bf1', 'ios/Switch2IOS/Info.plist': 'b1b8e51c4340370ce9ae4c7942a984f2af04e422af11670fb9968fb86f5b7629', 'ios/Switch2IOS/InputInventory.swift': 'dba26b2752ad49d7bb19285011515f606661eec7ce1221f70da069de8ddc6cc8', 'ios/Switch2IOS/LoadedInspection.swift': '94a7a68c6e3570f2a8faad19cb6e73a82ab12f7b78438be160c391513e9cce31', 'ios/Switch2IOS/PayloadValidator.swift': '51c2ce618a9e2af832b88f3ae74929b7a8aabac9dfe774969dcf0ad3892f5c97', 'ios/Switch2IOS/RuntimeBridge.h': 'aa234950e0ff7fb6b4c9dc6ec741189fd4ce6d605ac807ef1740f296c7cdbd3f', 'ios/Switch2IOS/SessionModel.swift': '7b171722078a0e887d56b8e58b2a35977d08663845beb5c9eaa4e3ba4d5a17d6', 'ios/Switch2IOS/Switch2IOSApp.swift': '7060a9ad9a98a8bf0c81a43e02bb553fa9892e3f495d44d000bc9045f61bda3f', 'ios/Switch2IOSTests/InputInventoryTests.swift': '712c63e1d90bdc8548915b91952d0b009d07757081bd5e6273ed110f0d5ff533', 'ios/Switch2IOSTests/LoadedInspectionTests.swift': '1be2980d1f8df40dc53fba654519d149f7c3e5e028f2177529960595e43031ed', 'runtime/include/s2i_dynamic.h': '66352e661c89054672c2b50358d0340e4d4a8237a18a90961632c61e0394270c', 'runtime/include/s2i_module.h': '08c3e26289e2e4e5136817ef894a7bd372b15ce8d7cc7119cec03d46585359f3', 'runtime/include/s2i_nso.h': '7bca941a0c1126fe634b47099520308c263917422a1dc44f5b084053667de748', 'runtime/src/s2i_dynamic.c': '8901033a2c82f57aa47da8d083a6206553a7f134feb3e1aa448286055e351eae', 'runtime/src/s2i_module.c': '4fecd9078c06574b0e5fa0e86052ea035e16ef9567cccdefc7d3e4dc5848628a', 'runtime/src/s2i_nso.c': '6e11b2a4fe08b4c787f304f389389898d3e88a3e6410d2b29a1d49cc85bb1675'}
+        source_hashes = {'ios/Switch2IOS.xcodeproj/project.pbxproj': '0dcefc4d654c3f537027d817bdac2958b33f49548a278eea1b3253b12c03e6a1', 'ios/Switch2IOS.xcodeproj/xcshareddata/xcschemes/Switch2IOS.xcscheme': 'a2f7b889b8f09938592fa074464556f7e8a42ed3294d2d61164fd1e3eaf02dcc', 'ios/Switch2IOS/ContentView.swift': '383d3978547d15b7b9d2eb2dc8da0148ceadf7cdf2ce49541468b05f8eaeacff', 'ios/Switch2IOS/Info.plist': 'b1b8e51c4340370ce9ae4c7942a984f2af04e422af11670fb9968fb86f5b7629', 'ios/Switch2IOS/InputInventory.swift': 'dba26b2752ad49d7bb19285011515f606661eec7ce1221f70da069de8ddc6cc8', 'ios/Switch2IOS/LoadedInspection.swift': '70b5ab6ee371bc5043f11177c768eb6207bf5bbbaec80999ab4f1064371f203d', 'ios/Switch2IOS/PayloadValidator.swift': '51c2ce618a9e2af832b88f3ae74929b7a8aabac9dfe774969dcf0ad3892f5c97', 'ios/Switch2IOS/PreparedInspection.swift': '18a8afd012ce4dd0849bfb5367444045f1686aed3e26d3df985ab04038124ca1', 'ios/Switch2IOS/RuntimeBridge.h': '60781e46e49275b87b553d5acd649def2ab53f44180ad1b8a8dd5baeb39ae2b8', 'ios/Switch2IOS/SessionModel.swift': '24aa2fecfc6ad7095c256a87944679b3a51fa925587485069ce498d4917d2c05', 'ios/Switch2IOS/Switch2IOSApp.swift': '7060a9ad9a98a8bf0c81a43e02bb553fa9892e3f495d44d000bc9045f61bda3f', 'ios/Switch2IOSTests/InputInventoryTests.swift': '712c63e1d90bdc8548915b91952d0b009d07757081bd5e6273ed110f0d5ff533', 'ios/Switch2IOSTests/LoadedInspectionTests.swift': '1be2980d1f8df40dc53fba654519d149f7c3e5e028f2177529960595e43031ed', 'ios/Switch2IOSTests/PreparedInspectionTests.swift': '3a7909607d1c22394489a38f8cac98fe248dc89a3da446cd438261541be8c483', 'runtime/include/s2i_dynamic.h': '0c2b31bcf19bef420274606a029873afa0b3a877c0b706c8f876aa1c10bcd2a0', 'runtime/include/s2i_module.h': '08c3e26289e2e4e5136817ef894a7bd372b15ce8d7cc7119cec03d46585359f3', 'runtime/include/s2i_nso.h': '7bca941a0c1126fe634b47099520308c263917422a1dc44f5b084053667de748', 'runtime/include/s2i_prepared.h': 'bf4a662a0860a379534db261ce75fee2da2cdc87e92a7ee1cd1074b804a2753c', 'runtime/src/s2i_dynamic.c': '46be50730deaec361f6d631f5a59d272d27c80d8b7102b2e6b59bcf66d4435a9', 'runtime/src/s2i_module.c': '4fecd9078c06574b0e5fa0e86052ea035e16ef9567cccdefc7d3e4dc5848628a', 'runtime/src/s2i_nso.c': '6e11b2a4fe08b4c787f304f389389898d3e88a3e6410d2b29a1d49cc85bb1675', 'runtime/src/s2i_prepared.c': '456d1ca09954be66d57ef66d099fb90953a3fff41f456d5269270423044b96ac'}
         for name, expected_hash in source_hashes.items():
             if hashlib.sha256(Path(name).read_bytes()).hexdigest() != expected_hash:
                 raise SystemExit("Frozen source content mismatch: " + name)
-        print('source_boundary PASS: only existing workflow modified; 18 frozen app/runtime files and 23 originals unchanged')
+        print('source_boundary PASS: exact prepared-stage changes; 22 frozen source hashes, 46 files, 23 untouched originals')
         PY
     - name: Build unsigned iPhoneOS app target
       timeout-minutes: 6
@@ -115,9 +115,9 @@ jobs:
         path = os.environ['RUNNER_TEMP']+'/loader-tests.xcresult'
         summary = json.loads(subprocess.check_output(['xcrun','xcresulttool','get','test-results','summary','--path',path], timeout=30))
         print(json.dumps(summary, indent=2))
-        if (summary.get('totalTestCount') != 28 or summary.get('passedTests') != 28
+        if (summary.get('totalTestCount') != 44 or summary.get('passedTests') != 44
             or summary.get('failedTests') != 0 or summary.get('skippedTests') != 0
             or summary.get('expectedFailures', 0) != 0):
-            raise SystemExit('Require all 28 XCTest methods passed, zero failed or skipped; unknown schema fails closed.')
+            raise SystemExit('Require all 44 XCTest methods passed, zero failed or skipped; unknown schema fails closed.')
         print('Actual simulator XCTest execution verified; device target built unsigned. No upload or deployment.')
         PY

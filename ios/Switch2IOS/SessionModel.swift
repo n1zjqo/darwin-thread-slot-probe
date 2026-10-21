@@ -7,9 +7,13 @@ final class SessionModel: ObservableObject {
     typealias InventoryLoader = @Sendable (URL) async throws -> InputInventory
     typealias InspectionLoader = @Sendable (URL, InputInventory) async throws -> LoadedInspectionSession
     typealias InspectionCloser = @Sendable (UUID) async -> Void
+    typealias PreparationLoader = @Sendable (UUID, String, UInt64) async throws -> PreparedInspectionSession
+    typealias PreparationCloser = @Sendable (UUID, UUID) async -> Void
     @Published private(set) var inventory: InputInventory?
     @Published private(set) var validation: PayloadValidationReport?
     @Published private(set) var loadedInspection: LoadedInspectionReport?
+    @Published private(set) var preparedInspection: PreparedInspectionReport?
+    @Published private(set) var isPreparing = false
     @Published private(set) var isImporting = false
     @Published private(set) var isValidating = false
     @Published private(set) var isLoading = false
@@ -17,18 +21,31 @@ final class SessionModel: ObservableObject {
     @Published private(set) var isForeground = true
     private var operationTask: Task<Void, Never>?
     private var generation = UUID()
+    private var preparationTask: Task<Void, Never>?
+    private var preparationGeneration = UUID()
+    private var preparedIdentity: (source: UUID, token: UUID)?
     private var selectedFolder: URL?
     private var loadedToken: UUID?
     private let inventoryLoader: InventoryLoader
     private let inspectionLoader: InspectionLoader
     private let inspectionCloser: InspectionCloser
+    private let preparationLoader: PreparationLoader
+    private let preparationCloser: PreparationCloser
 
     init(inventoryLoader: @escaping InventoryLoader = { try await InputWorkQueue.shared.inventory(folder: $0) },
          inspectionLoader: @escaping InspectionLoader = { try await InputWorkQueue.shared.loadForInspection(folder: $0, inventory: $1) },
-         inspectionCloser: @escaping InspectionCloser = { await InputWorkQueue.shared.close(token: $0) }) {
+         inspectionCloser: @escaping InspectionCloser = { await InputWorkQueue.shared.close(token: $0) },
+         preparationLoader: @escaping PreparationLoader = {
+             try await InputWorkQueue.shared.prepare(sourceToken: $0, moduleName: $1, guestBase: $2)
+         },
+         preparationCloser: @escaping PreparationCloser = {
+             await InputWorkQueue.shared.closePrepared(sourceToken: $0, token: $1)
+         }) {
         self.inventoryLoader = inventoryLoader
         self.inspectionLoader = inspectionLoader
         self.inspectionCloser = inspectionCloser
+        self.preparationLoader = preparationLoader
+        self.preparationCloser = preparationCloser
     }
 
     @discardableResult
@@ -121,14 +138,82 @@ final class SessionModel: ObservableObject {
         return task
     }
 
+    /// Uses an already-held module. The explicit base is a layout-model integer,
+    /// not an inferred game address; no input is reopened and no native pointer crosses await.
+    @discardableResult
+    func prepareSelectedModule(_ moduleName: String, baseText: String) -> Task<Void, Never>? {
+        guard let sourceToken = loadedToken, let report = loadedInspection,
+              !isImporting, !isValidating, !isLoading else { return nil }
+        let base: UInt64
+        do {
+            guard report.modules.contains(where: { $0.name == moduleName }) else {
+                throw PreparedInspectionError.unknownModule
+            }
+            base = try PreparedModelBase.parse(baseText)
+        } catch { errorMessage = error.localizedDescription; return nil }
+        cancelPreparation() // Close only the old derived model, not its source.
+        let request = UUID()
+        preparationGeneration = request
+        isPreparing = true
+        errorMessage = nil
+        let loader = preparationLoader
+        let closer = preparationCloser
+        let task = Task { [weak self] in
+            let worker = Task.detached(priority: .userInitiated) {
+                try await loader(sourceToken, moduleName, base)
+            }
+            let result = await withTaskCancellationHandler(operation: { await worker.result }, onCancel: { worker.cancel() })
+            guard let self = self, self.preparationGeneration == request,
+                  self.loadedToken == sourceToken, !Task.isCancelled else {
+                if case .success(let session) = result { await closer(session.sourceToken, session.token) }
+                return
+            }
+            self.isPreparing = false
+            self.preparationTask = nil
+            switch result {
+            case .success(let session):
+                guard session.sourceToken == sourceToken else {
+                    await closer(session.sourceToken, session.token)
+                    // A faulty injected provider must not publish into a different source.
+                    if self.preparationGeneration == request { self.errorMessage = PreparedInspectionError.staleSource.localizedDescription }
+                    return
+                }
+                self.preparedIdentity = (sourceToken, session.token)
+                self.preparedInspection = session.report
+            case .failure(let error):
+                if !(error is CancellationError) { self.errorMessage = error.localizedDescription }
+            }
+        }
+        preparationTask = task
+        return task
+    }
+
+    /// Cancels pending preparation and closes an accepted model only. Source stays loaded.
+    @discardableResult
+    func cancelPreparation() -> Task<Void, Never>? {
+        preparationGeneration = UUID()
+        preparationTask?.cancel()
+        preparationTask = nil
+        isPreparing = false
+        preparedInspection = nil
+        guard let identity = preparedIdentity else { return nil }
+        preparedIdentity = nil
+        let closer = preparationCloser
+        return Task { await closer(identity.source, identity.token) }
+    }
+
     /// Release the exact accepted session; an older close cannot close a newer token.
     @discardableResult
     func closeLoadedInspection() -> Task<Void, Never>? {
+        let closePrepared = cancelPreparation()
         loadedInspection = nil
-        guard let token = loadedToken else { return nil }
+        guard let token = loadedToken else { return closePrepared }
         loadedToken = nil
         let closer = inspectionCloser
-        return Task { await closer(token) }
+        return Task {
+            await closePrepared?.value
+            await closer(token) // The actor also enforces derived-before-source release.
+        }
     }
 
     func reportPickerError(_ error: Error) {
@@ -163,9 +248,14 @@ final class SessionModel: ObservableObject {
 
     deinit {
         operationTask?.cancel()
-        if let token = loadedToken {
-            let closer = inspectionCloser
-            Task { await closer(token) }
+        preparationTask?.cancel()
+        let identity = preparedIdentity
+        let source = loadedToken
+        let closePrepared = preparationCloser
+        let closeSource = inspectionCloser
+        Task {
+            if let identity = identity { await closePrepared(identity.source, identity.token) }
+            if let source = source { await closeSource(source) }
         }
     }
 }

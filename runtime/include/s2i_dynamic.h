@@ -25,7 +25,8 @@ typedef struct {
 typedef enum {
  S2I_DYNAMIC_OK = 0, S2I_DYNAMIC_INVALID_ARGUMENT,
  S2I_DYNAMIC_INVALID_RANGE, S2I_DYNAMIC_INVALID_FORMAT,
- S2I_DYNAMIC_RESOURCE_LIMIT, S2I_DYNAMIC_BUFFER_TOO_SMALL
+ S2I_DYNAMIC_RESOURCE_LIMIT, S2I_DYNAMIC_BUFFER_TOO_SMALL,
+ S2I_DYNAMIC_UNSUPPORTED_METADATA
 } s2i_dynamic_status;
 enum {
  S2I_DYNAMIC_NO_MOD0 = 1u,
@@ -55,6 +56,24 @@ s2i_dynamic_status s2i_dynamic_inspect(const s2i_nso_plan *plan,
  size_t dependency_capacity, s2i_dynamic_symbol *symbols,
  size_t symbol_capacity, s2i_dynamic_report *report);
 const char *s2i_dynamic_status_string(s2i_dynamic_status status);
+
+/* Strict preparation metadata subset. Existing inventory API/ABI is unchanged.
+ * Revalidates via the inventory parser, then accepts only baseline singleton tags
+ * {4,5,6,7,8,9,10,11,12,14,39}; DT_NEEDED and every other tag are unsupported.
+ * RELA requires all three tags even at zero length, entry size 24, 8-byte table
+ * alignment, and a range within one ORIGINAL decoded segment (never BSS/gaps).
+ * Output bytes borrow decoded storage. INIT is retained only, NEVER executed.
+ * This inventories table bytes; it does not validate/apply relocation records.
+ * Cleared output on failure; input/output must not alias. No allocation. */
+#define S2I_DYNAMIC_MAX_RELOCATIONS 100000u
+typedef struct {
+ uint64_t rela_address, init_offset;
+ s2i_dynamic_bytes rela;
+ size_t relocation_count;
+ int has_rela, has_init;
+} s2i_dynamic_relocations;
+s2i_dynamic_status s2i_dynamic_inspect_relocations(const s2i_nso_plan *,
+ const s2i_dynamic_bytes decoded[3], s2i_dynamic_relocations *out);
 #ifdef __cplusplus
 }
 #endif

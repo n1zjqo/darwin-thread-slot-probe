@@ -56,6 +56,16 @@ private final class InspectionBatchOwner {
     }
 }
 
+private final class PreparedImageOwner {
+    var handle: OpaquePointer?
+    let session: PreparedInspectionSession
+    init(_ handle: OpaquePointer, session: PreparedInspectionSession) {
+        self.handle = handle
+        self.session = session
+    }
+    deinit { s2i_prepared_destroy(&handle) }
+}
+
 /// Serial ownership, not OS-thread affinity. No tc_bind or TLS association is used.
 /// Native load methods are synchronous: no actor reentrancy while handles are accessed.
 actor InputWorkQueue {
@@ -67,16 +77,30 @@ actor InputWorkQueue {
     // or symbol strings are copied. This is not a process RSS/allocator-overhead cap.
     static let reportReservationPerModule = 4096
     private var retained: InspectionBatchOwner?
+    private var prepared: PreparedImageOwner?
+    private let workingByteLimit: Int
+
+    // A lower limit is useful for deterministic integration tests; callers cannot
+    // increase the production ceiling or silently relax native hard limits.
+    init(maximumWorkingBytes: Int = InputWorkQueue.maximumWorkingBytes) {
+        precondition(maximumWorkingBytes > 0 && maximumWorkingBytes <= Self.maximumWorkingBytes)
+        self.workingByteLimit = maximumWorkingBytes
+    }
+
+    private func releaseInspection() {
+        prepared = nil // Derived storage is always released before its source batch.
+        retained = nil
+    }
 
     func inventory(folder: URL) throws -> InputInventory {
         try Task.checkCancellation()
-        retained = nil
+        releaseInspection()
         return try InputInventoryReader.read(folder: folder)
     }
 
     func validate(folder: URL, inventory: InputInventory) throws -> PayloadValidationReport {
         try Task.checkCancellation()
-        retained = nil
+        releaseInspection()
         return try PayloadValidator.validate(folder: folder, inventory: inventory)
     }
 
@@ -84,7 +108,7 @@ actor InputWorkQueue {
     /// A successful result is diagnostic only, even when both completeness flags are true.
     func loadForInspection(folder: URL, inventory: InputInventory) throws -> LoadedInspectionSession {
         try Task.checkCancellation()
-        retained = nil
+        releaseInspection()
         let names = inventory.modules.map(\.name)
         let allowed = Set(InputInventoryReader.moduleNames)
         guard !names.isEmpty, names.count <= allowed.count, Set(names).count == names.count,
@@ -102,7 +126,7 @@ actor InputWorkQueue {
             var ownedBytes = 0
             for module in inventory.modules {
                 try Task.checkCancellation()
-                let remaining = Self.maximumWorkingBytes - reportReservation - ownedBytes
+                let remaining = workingByteLimit - reportReservation - ownedBytes
                 guard remaining > 0 else { throw LoadedInspectionError.resourceLimit(module.name) }
                 // Input Data dies on return, before the next module's input is allocated.
                 let loaded = try Self.loadModule(module, rootFD: rootFD, remaining: remaining)
@@ -122,11 +146,68 @@ actor InputWorkQueue {
     /// Idempotent and token-specific: stale completion cleanup cannot close a newer batch.
     func close(token: UUID) {
         guard retained?.token == token else { return }
-        retained = nil
+        releaseInspection()
     }
 
     /// Value-only lifecycle observation used by the app integration tests.
     func retainedToken() -> UUID? { retained?.token }
+
+    /// Explicitly replaces the single old model, but never discards its source.
+    /// Stale/cancelled requests and invalid selection/base cannot mutate current state.
+    func prepare(sourceToken: UUID, moduleName: String, guestBase: UInt64) throws -> PreparedInspectionSession {
+        try Task.checkCancellation()
+        guard let source = retained, source.token == sourceToken else { throw PreparedInspectionError.staleSource }
+        guard let index = source.report.modules.firstIndex(where: { $0.name == moduleName }),
+              let module = source.modules[index].handle else { throw PreparedInspectionError.unknownModule }
+        guard guestBase % 4096 == 0 else { throw PreparedInspectionError.invalidBase }
+        prepared = nil // Explicit replacement frees the old model before allocating another.
+        let budget = try PreparedInspectionBudget.calculate(
+            sourceOwned: source.report.ownedBytes, sourceReport: source.report.reservedReportBytes,
+            selectedOwned: source.report.modules[index].ownedBytes, limit: workingByteLimit)
+        var options = s2i_prepared_default_options()
+        options.other_live_bytes = budget.otherLive
+        options.max_owned_bytes = budget.maximumOwned
+        options.max_peak_bytes = budget.maximumPeak
+        var native: OpaquePointer?
+        var nativeError = s2i_prepared_error()
+        defer { s2i_prepared_destroy(&native) }
+        // No suspension, borrowed pointer escape, thread-local binding or executable call.
+        let status = s2i_prepared_create(module, guestBase, &options, &native, &nativeError)
+        guard status == S2I_PREPARED_OK, let pointer = native else {
+            if status == S2I_PREPARED_RESOURCE_LIMIT { throw PreparedInspectionError.resourceLimit }
+            throw PreparedInspectionError.native(String(cString: s2i_prepared_status_string(status)))
+        }
+        try Task.checkCancellation()
+        var summary = s2i_prepared_summary()
+        guard s2i_prepared_get_summary(pointer, &summary) == S2I_PREPARED_OK,
+              summary.guest_base == guestBase,
+              summary.source_module_bytes == source.report.modules[index].ownedBytes,
+              summary.other_live_bytes == budget.otherLive,
+              summary.owned_bytes <= budget.maximumOwned,
+              summary.creation_peak_bytes <= budget.maximumPeak else {
+            throw PreparedInspectionError.native("原生模型摘要或预算不一致")
+        }
+        let report = PreparedInspectionReport(moduleName: moduleName, guestBase: summary.guest_base,
+            imageBytes: summary.image_bytes, ownedBytes: summary.owned_bytes,
+            temporaryBytes: summary.temporary_bytes, creationPeakBytes: summary.creation_peak_bytes,
+            reservedReportBytes: PreparedInspectionBudget.reportReservation,
+            relocationCount: summary.relocation_count, relativeCount: summary.relative_count,
+            absoluteCount: summary.absolute_count, hasInitializer: summary.has_initializer != 0)
+        let session = PreparedInspectionSession(sourceToken: sourceToken, token: UUID(), report: report)
+        try Task.checkCancellation()
+        prepared = PreparedImageOwner(pointer, session: session)
+        native = nil
+        return session
+    }
+
+    /// Both tokens are required: an old close must not release any newer model.
+    func closePrepared(sourceToken: UUID, token: UUID) {
+        guard retained?.token == sourceToken,
+              prepared?.session.sourceToken == sourceToken, prepared?.session.token == token else { return }
+        prepared = nil
+    }
+
+    func retainedPreparedSession() -> PreparedInspectionSession? { prepared?.session }
 
     private static func loadModule(_ module: InputInventory.Module, rootFD: Int32,
                                    remaining: Int) throws -> (InspectionModuleOwner, LoadedInspectionReport.Module) {
