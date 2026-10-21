@@ -4,6 +4,14 @@
 	classes = {};
 	objectVersion = 56;
 	objects = {
+		000000000000000000000080 = { isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = X18NativeFixture.h; sourceTree = "<group>"; };
+		000000000000000000000081 = { isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = X18NativeFixture.c; sourceTree = "<group>"; };
+		000000000000000000000082 = { isa = PBXFileReference; lastKnownFileType = sourcecode.asm; path = X18NativeFixture.S; sourceTree = "<group>"; };
+		000000000000000000000083 = { isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = X18NativeTests.m; sourceTree = "<group>"; };
+		000000000000000000000084 = { isa = PBXBuildFile; fileRef = 000000000000000000000081; };
+		000000000000000000000085 = { isa = PBXBuildFile; fileRef = 000000000000000000000082; };
+		000000000000000000000086 = { isa = PBXBuildFile; fileRef = 000000000000000000000083; };
+
         000000000000000000000057 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkInspection.swift; sourceTree = "<group>"; };
         000000000000000000000058 = { isa = PBXBuildFile; fileRef = 000000000000000000000057; };
         000000000000000000000059 = { isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../runtime/src/s2i_link_plan.c; sourceTree = "<group>"; };
@@ -58,10 +66,10 @@
 		00000000000000000000000A = { isa = XCConfigurationList; buildConfigurations = (000000000000000000000014, 000000000000000000000015); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		00000000000000000000000B = { isa = XCConfigurationList; buildConfigurations = (00000000000000000000001E, 00000000000000000000001F); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		000000000000000000000028 = { isa = PBXNativeTarget; buildConfigurationList = 00000000000000000000002B; buildPhases = (00000000000000000000002C, 00000000000000000000002D); buildRules = (); dependencies = (00000000000000000000002E); name = Switch2IOSTests; productName = Switch2IOSTests; productReference = 00000000000000000000002A; productType = "com.apple.product-type.bundle.unit-test"; };
-		000000000000000000000029 = { isa = PBXGroup; children = (00000000000000000000002F, 000000000000000000000049, 000000000000000000000055, 00000000000000000000005C); path = Switch2IOSTests; sourceTree = "<group>"; };
+		000000000000000000000029 = { isa = PBXGroup; children = (00000000000000000000002F, 000000000000000000000049, 000000000000000000000055, 00000000000000000000005C, 000000000000000000000080, 000000000000000000000081, 000000000000000000000082, 000000000000000000000083); path = Switch2IOSTests; sourceTree = "<group>"; };
 		00000000000000000000002A = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = Switch2IOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		00000000000000000000002B = { isa = XCConfigurationList; buildConfigurations = (000000000000000000000032, 000000000000000000000033); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		00000000000000000000002C = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000030, 00000000000000000000004A, 000000000000000000000056, 00000000000000000000005D); runOnlyForDeploymentPostprocessing = 0; };
+		00000000000000000000002C = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000030, 00000000000000000000004A, 000000000000000000000056, 00000000000000000000005D, 000000000000000000000084, 000000000000000000000085, 000000000000000000000086); runOnlyForDeploymentPostprocessing = 0; };
 		00000000000000000000002D = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		00000000000000000000002E = { isa = PBXTargetDependency; target = 000000000000000000000004; targetProxy = 000000000000000000000031; };
 		00000000000000000000002F = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputInventoryTests.swift; sourceTree = "<group>"; };

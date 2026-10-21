@@ -1,0 +1,137 @@
+name: One approved owned ARM64 native fixture validation
+'on':
+  push:
+    branches: [main]
+    paths: ['.github/workflows/x18-native-once.yml']
+permissions: {}
+concurrency:
+  group: approved-x18-native-once-20261021
+  cancel-in-progress: false
+jobs:
+  native:
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'n1zjqo/darwin-thread-slot-probe' &&
+      github.event.repository.id == 1427756344 &&
+      github.event.repository.private == false &&
+      github.ref == 'refs/heads/main' &&
+      github.event.before == '03f10e0e809ccc1b5769c890c056d52fd55dffee' &&
+      github.run_number == 1 && github.run_attempt == 1 &&
+      github.event.head_commit.message == '[approved-x18-native-once-20261021]'
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_ASKPASS: /usr/bin/false
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_CONFIG_NOSYSTEM: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Fetch exact public commit and verify source boundary
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$RUNNER_ARCH" = ARM64
+          git init .
+          git -c credential.helper= -c core.askPass= -c http.extraHeader= fetch --no-tags --depth=2 https://github.com/n1zjqo/darwin-thread-slot-probe.git "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          base='03f10e0e809ccc1b5769c890c056d52fd55dffee'; tree='267363145160af213815603b99c87917f5141c56'; sha=os.environ['GITHUB_SHA']
+          original={'.github/workflows/context-once.yml': '068cd5d45fb073dbb52063f09253f7475f08fc96', '.github/workflows/loader-apple-once.yml': 'c9cd0b56a41be22a89afffc6a87cabcef9c34395', '.github/workflows/probe-once.yml': 'b5ade054768db26186f63f5806af3903cff71e46', 'README.md': '26055ce804dc5e5c1f58a240bb61991b2d510ae7', 'ios/Switch2IOS.xcodeproj/project.pbxproj': '747fefaad8d927dcc7fb8b695f11ebc3adf734ab', 'ios/Switch2IOS.xcodeproj/xcshareddata/xcschemes/Switch2IOS.xcscheme': '2c199cef36beb045f6040c8da9024d9acfc43971', 'ios/Switch2IOS/ContentView.swift': 'e53b14f21caeac22d648b392f66cd2494e870d47', 'ios/Switch2IOS/Info.plist': '9f230ebdda49d34fb2458422bac238444a72d12b', 'ios/Switch2IOS/InputInventory.swift': '9329bc31288b167f06136707f47b7a79dcffd4b0', 'ios/Switch2IOS/LinkInspection.swift': 'a033cfaa4dbf77546ff2e3f7f1679b11d69b27d3', 'ios/Switch2IOS/LoadedInspection.swift': '1eb31c1903ed897bac80a1ef91c7a64b6a394859', 'ios/Switch2IOS/PayloadValidator.swift': '866f659f06afb3ced96ec81a633f4db12f94c610', 'ios/Switch2IOS/PreparedInspection.swift': 'e1ed219d7aeedda0b995d503bffaf462f03900dc', 'ios/Switch2IOS/RuntimeBridge.h': '9176ae510ca8a70192ec26433c1b5897185dfe57', 'ios/Switch2IOS/SessionModel.swift': '9ce95dc068e3793ed0de4745f361a5062c7cbc63', 'ios/Switch2IOS/Switch2IOSApp.swift': 'b03a71f673ea914522287fe2b84ca5ae9901886e', 'ios/Switch2IOSTests/InputInventoryTests.swift': '48749b98efbbf3ab43ad9b64add9b361ec1e36d7', 'ios/Switch2IOSTests/LinkInspectionTests.swift': '1b98cb9c0f4d9fc2f4b99e977fd3b3f7154d7519', 'ios/Switch2IOSTests/LoadedInspectionTests.swift': '20f6e07a44a0adc177fe759d30efa1c729ffe0e6', 'ios/Switch2IOSTests/PreparedInspectionTests.swift': 'afee10008a01e08f34e87e4a23dc73846f8bd05a', 'probe.c': '002f582549d792d5c04a23815543c701caf8b0cb', 'runtime/include/s2i_dynamic.h': 'e9828f40f107596f694ce62dce6779884f6581d7', 'runtime/include/s2i_link_plan.h': 'f9956452fc862619e4aaa5c76ab0990b0d3430d8', 'runtime/include/s2i_module.h': '8c0985c2f0338f3a3aaa9f9988d619b740a38367', 'runtime/include/s2i_nso.h': 'd026b98f5abc695b53654b6efcc261c4929ca508', 'runtime/include/s2i_prepared.h': '69713214f158e0bc739052c19fd8fb1a2eed629a', 'runtime/src/s2i_dynamic.c': '3e5fd33d654d694f6909e1731d46e05c1708245c', 'runtime/src/s2i_link_plan.c': '721875d82bc93392a09a9d89f7efbe866ec07059', 'runtime/src/s2i_module.c': 'a0b82d10b658b3da3640fd9200b8483776dbe11b', 'runtime/src/s2i_nso.c': '7893133ee7c6efca74bbf2fc65da0f62801d103a', 'runtime/src/s2i_prepared.c': 'b33f500e8137a86abf4d136386ec9bec8ef4345a', 'slot_contract.h': 'ca76fae96fd8ccd37f827eb5fb623863e9c98647', 'test_slot_contract.c': 'a528b4def56fdb76f24b455b761a6e5365d85257', 'thread-context/.gitignore': '15739020b6d450c39ae7f3ef03da91618bf3269d', 'thread-context/Makefile': 'ac60ba8a772edaaeefaa2abc0f606f6783d32fe4', 'thread-context/README.md': '21b50c5e7b41e943ab01e75d653339b0dfa1dd66', 'thread-context/docs/INTEGRATION_GATES.md': '150762d6fc8bdc8efe21cc4a4b31b734b0aa8fca', 'thread-context/docs/VALIDATION.md': 'fe0b2624898e7fd7702dbbadcecdc1e2ee547418', 'thread-context/include/thread_context.h': 'bfed4480db7c888368c2ed6bab5dbbe1cb44d806', 'thread-context/include/thread_context_backend.h': '770debb0713fac943188aedd82b8c3d7f82cd88d', 'thread-context/review-tests/README.md': '93b584cd3ec7a4f39c2a599c0f56887d0a13b472', 'thread-context/review-tests/cancel_transition.c': '1656ee2f1db65492b8f4bed51a89f2d18fb0dbef', 'thread-context/review-tests/cpp_backend.cpp': '204ee6856de3b6fdc583f36262f2f7a8f8a1c6de', 'thread-context/review-tests/run_review.sh': 'edc7405f8e4ea9f69a79767f7ee7e5612ebbc997', 'thread-context/review-tests/stress.c': 'b21f7b2322eddd3559e1813adf885341138d6079', 'thread-context/src/slot_candidate.h': 'da26767d0c1fef2a8202d3d94b2c3c1557c6bacf', 'thread-context/src/thread_context.c': '237f7500e95627a8214d647a5a7830566dc20d40', 'thread-context/tests/test_cpp_linkage.cpp': '1164da6186a23c034c19eaa2d086ef718816d0bb', 'thread-context/tests/test_slot_candidate.c': '985d15df6f7c12c91dd7c5fd3f38a7c95e9de8f0', 'thread-context/tests/test_thread_context.c': 'a44684c777e184d71848f872b5caf51b1161e68e'}
+          hashes={'ios/Switch2IOS.xcodeproj/project.pbxproj': '0b99b92a252f4dd0377c661101bc044d059e224cd9327cbe3746610223bfff60', 'ios/Switch2IOSTests/X18NativeFixture.h': '24ca647500b3f847469c7084f3a07493785933aae9c2fb9b703b19393ba603a8', 'ios/Switch2IOSTests/X18NativeFixture.c': '5e7401a78c2b1c6cb4a19dcaf81399d82b3cc0cc2bffce1596060462ac806dd0', 'ios/Switch2IOSTests/X18NativeFixture.S': '1969bee2ce7c59417790f1a0bf68dd63c197bce30a1970c1b1056cc00c25c061', 'ios/Switch2IOSTests/X18NativeTests.m': '0653f5835a5346a091cea2bf72c2368cc21a78bd662da308e93122da354d5c58', 'ios/tests/check_project.py': '4444459b04dcbc53bd7404ce26da1c89d50536cf7c3a0db9d9e7506937518340', 'ios/tests/check_x18_native_fixture.py': 'eda838e8860ed61c1d2c25e22da2d40e7f09199c68d832d266e4ee2c26b1b710', 'ios/X18-NATIVE-STAGE.md': '09e3179f79038ffb0ca431038dd0d500993b9b8a5f273829a4dcb8663d83ff6a'}
+          modified='ios/Switch2IOS.xcodeproj/project.pbxproj'; workflow='.github/workflows/x18-native-once.yml'
+          additions=(set(hashes)-{modified})|{workflow}
+          def git(*args): return subprocess.check_output(['git',*args],timeout=30)
+          assert git('rev-list','--parents','-n','1',sha).decode().split()==[sha,base], 'Sole approved parent required'
+          assert git('rev-parse',base+'^{tree}').decode().strip()==tree
+          actual={}
+          for line in git('ls-tree','-r','-z',sha).split(b'\0'):
+              if not line: continue
+              info,path=line.split(b'\t',1); mode,kind,blob=info.decode().split();name=path.decode()
+              assert mode=='100644' and kind=='blob', 'Only ordinary non-executable source files permitted'
+              assert name not in actual;actual[name]=blob
+          assert set(actual)==set(original)|additions
+          changes=git('diff','--name-status','--no-renames',base,sha).decode().splitlines()
+          assert len(changes)==9 and set(changes)=={'A\t'+p for p in additions}|{'M\t'+modified}
+          for path,blob in original.items():
+              if path!=modified: assert actual[path]==blob, 'Existing public file changed: '+path
+          for path,wanted in hashes.items():
+              p=Path(path);assert p.is_file() and not p.is_symlink()
+              assert hashlib.sha256(p.read_bytes()).hexdigest()==wanted, 'Source hash mismatch: '+path
+          print('source_boundary PASS: 8 additions, 1 modification, 49 unchanged originals; no private payloads')
+          PY
+      - name: Check source and compiled literal ARM64 fixture bodies
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          python3 ios/tests/check_project.py
+          python3 ios/tests/check_x18_native_fixture.py
+          SDKROOT="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          xcrun --sdk iphonesimulator clang -target arm64-apple-ios15.0-simulator -isysroot "$SDKROOT" -c ios/Switch2IOSTests/X18NativeFixture.S -o "$RUNNER_TEMP/X18NativeFixture.o"
+          python3 ios/tests/check_x18_native_fixture.py --object "$RUNNER_TEMP/X18NativeFixture.o"
+      - name: Select and boot one preinstalled ARM64 iOS Simulator
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,re,subprocess
+          from pathlib import Path
+          def run(args,timeout=110): return subprocess.check_output(args,timeout=timeout)
+          runtimes=json.loads(run(['xcrun','simctl','list','runtimes','--json']))['runtimes']
+          allowed={r['identifier']:r for r in runtimes if r.get('isAvailable') and re.fullmatch(r'com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+',r.get('identifier',''))}
+          devices=json.loads(run(['xcrun','simctl','list','devices','available','--json']))['devices']
+          candidates=[(runtime,d) for runtime,ds in devices.items() if runtime in allowed for d in ds if d.get('isAvailable') and d.get('name','').startswith('iPhone') and re.fullmatch(r'[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}',d.get('udid',''))]
+          assert candidates, 'No preinstalled available iPhone simulator; no downloads/fallback permitted'
+          runtime,device=sorted(candidates,key=lambda x:(x[0],x[1]['name'],x[1]['udid']))[-1]
+          udid=device['udid']
+          with open(os.environ['GITHUB_ENV'],'a') as f: f.write('SIMULATOR_UDID='+udid+'\n')
+          Path(os.environ['RUNNER_TEMP'],'selected-simulator.json').write_text(json.dumps({'runtime':allowed[runtime],'device':device}))
+          print(json.dumps({'selected_runtime':allowed[runtime],'selected_device':device}))
+          # One boot request only, never install or create a simulator.
+          if device.get('state')!='Booted': subprocess.run(['xcrun','simctl','boot',udid],check=True,timeout=45)
+          subprocess.run(['xcrun','simctl','bootstatus',udid,'-b'],check=True,timeout=90)
+          PY
+      - name: Run all 76 XCTest methods once
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' 2>&1 | tee "$RUNNER_TEMP/native-xctest.log"
+          import os,subprocess
+          args=['xcodebuild','-project','ios/Switch2IOS.xcodeproj','-scheme','Switch2IOS','-configuration','Debug','-disableAutomaticPackageResolution','-skipPackageUpdates','-sdk','iphonesimulator','-destination','platform=iOS Simulator,id='+os.environ['SIMULATOR_UDID']+',arch=arm64','-destination-timeout','60','-derivedDataPath',os.environ['RUNNER_TEMP']+'/native-simulator','-resultBundlePath',os.environ['RUNNER_TEMP']+'/native-tests.xcresult','-parallel-testing-enabled','NO','-maximum-concurrent-test-simulator-destinations','1','-test-iterations','1','-test-timeouts-enabled','YES','-default-test-execution-time-allowance','30','-maximum-test-execution-time-allowance','60','ARCHS=arm64','ONLY_ACTIVE_ARCH=YES','CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=','DEVELOPMENT_TEAM=','test']
+          subprocess.run(args,check=True,timeout=660)
+          PY
+      - name: Verify actual architecture and exact xcresult methods
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,re,subprocess
+          from collections import Counter
+          from pathlib import Path
+          expected=['InputInventoryTests/testChangedModuleSizeIsRejected', 'InputInventoryTests/testEntryBudgetFails', 'InputInventoryTests/testInvalidMagicFails', 'InputInventoryTests/testMissingMainFails', 'InputInventoryTests/testNestedExeFSInventory', 'InputInventoryTests/testPayloadFileMemoryBudget', 'InputInventoryTests/testPayloadHashFlagIsActuallyVerified', 'InputInventoryTests/testPayloadHashMismatchIsRejected', 'InputInventoryTests/testPayloadValidationWithoutHashDoesNotClaimHashes', 'InputInventoryTests/testSymbolicExeFSFails', 'InputInventoryTests/testSymbolicModuleFails', 'InputInventoryTests/testSyntheticHeaderInventory', 'InputInventoryTests/testTruncatedHeaderFails', 'LinkInspectionSessionModelTests/testCancelledLateSuccessIsClosedWithoutLosingSourceOrPreparedReport', 'LinkInspectionSessionModelTests/testCancelledQueuedLinkNeverEntersLoaderAfterPreparationBarrier', 'LinkInspectionSessionModelTests/testCancelledQueuedPreparationNeverEntersLoaderAfterLinkBarrier', 'LinkInspectionSessionModelTests/testCloseClearAndBackgroundAlsoRejectInFlightLateSuccess', 'LinkInspectionSessionModelTests/testCloseClearAndBackgroundReleaseAcceptedDerivedReportsBeforeSource', 'LinkInspectionSessionModelTests/testDeallocationClosesAcceptedDerivedReportsBeforeSource', 'LinkInspectionSessionModelTests/testDeallocationClosesLateUnpublishedSuccessBeforeSource', 'LinkInspectionSessionModelTests/testExplicitActionRequiredAndLinkCancellationOnlyClosesLink', 'LinkInspectionSessionModelTests/testFailedReplacementClosesOldLinkAndPreservesPreparedAndSource', 'LinkInspectionSessionModelTests/testLateOlderFailureCannotOverwriteNewSuccess', 'LinkInspectionSessionModelTests/testLateOlderSuccessCannotReplaceNewReportForSameSource', 'LinkInspectionSessionModelTests/testLinkThenPreparationWaitsForDeliveryOrCancelledLateCleanup', 'LinkInspectionSessionModelTests/testPreparationThenLinkWaitsForDeliveryOrCancelledLateCleanup', 'LinkInspectionSessionModelTests/testSourceReplacementRejectsLateLinkWithoutClosingNewSource', 'LinkInspectionSessionModelTests/testWrongSourceCleanupAwaitCannotSetErrorOnNewGeneration', 'LinkInspectionSessionModelTests/testWrongSourceProviderIsClosedAndCannotPublish', 'LinkInspectionTests/testAllAllowlistedModulesAreIncludedInCallerOrder', 'LinkInspectionTests/testBudgetIncludesPreparedStorageAndReportsWithoutDoubleCountingSources', 'LinkInspectionTests/testBudgetRejectsNegativeOverflowAndAboveCeilingInputs', 'LinkInspectionTests/testCancelledQueuedLinkRequestCannotDropNewerLinkOrPreparedOwner', 'LinkInspectionTests/testCloseInventoryValidationAndReloadCascadeBothDerivedCleanups', 'LinkInspectionTests/testExactNativePeakSucceedsAndOneByteUnderFailsAtomically', 'LinkInspectionTests/testFailedExplicitReplacementDropsOldLinkButKeepsPreparedAndSource', 'LinkInspectionTests/testGNUValidationPreservesFrozenWarning32AndDefersPolicy', 'LinkInspectionTests/testInventoryUsesAllHeldSourcesWithoutReopeningFiles', 'LinkInspectionTests/testPreparedOwnerSurvivesLinkAndIsChargedWhileOnlyCopiedLinkReportRemains', 'LinkInspectionTests/testStaleSourceAndWrongCloseTokensCannotMutateReplacement', 'LinkInspectionTests/testUnknownMetadataAndGNUOnlyStayIncompleteWithoutPretendingPolicy', 'LinkInspectionTests/testUnsupportedRelocationBadGNUAndDuplicateTargetPublishNoPartialLink', 'LoadedInspectionSessionModelTests/testCancelledSuccessfulLoadClosesUnpublishedToken', 'LoadedInspectionSessionModelTests/testClearAndBackgroundCloseAcceptedTokens', 'LoadedInspectionSessionModelTests/testLateOldResultDoesNotReplaceNewerReport', 'LoadedInspectionTests/testBudgetIncludesInputAndReportBeforeHugeDecode', 'LoadedInspectionTests/testCancelledQueuedOperationsDoNotReleaseNewSession', 'LoadedInspectionTests/testFailureInLaterModulePublishesNoPartialSession', 'LoadedInspectionTests/testInputChangeRejectsLoad', 'LoadedInspectionTests/testOldTokenCannotCloseReplacement', 'LoadedInspectionTests/testOwnedSessionClosesButCopiedReportSurvives', 'PreparedInspectionSessionModelTests/testCancelPreparationCleansLateSuccessButPreservesSource', 'PreparedInspectionSessionModelTests/testCloseClearAndBackgroundReleaseModelBeforeSource', 'PreparedInspectionSessionModelTests/testDeallocatedModelClosesLateUnpublishedPreparation', 'PreparedInspectionSessionModelTests/testFailureAndInvalidInputKeepSourceAndDoNotPretendPrepared', 'PreparedInspectionSessionModelTests/testLateOldModelCannotReplaceNewModelForSameSource', 'PreparedInspectionSessionModelTests/testSourceReplacementRejectsLateOldModelWithoutTouchingNewReport', 'PreparedInspectionSessionModelTests/testWrongSourceProviderCleanupCannotSetErrorOnNewGeneration', 'PreparedInspectionTests/testActualOwnedSourcePreparesAndCopiedReportSurvivesClose', 'PreparedInspectionTests/testAggregateBudgetFailurePreservesAllLoadedSources', 'PreparedInspectionTests/testBudgetChargesAllSourcesBothReportsAndRejectsOverflow', 'PreparedInspectionTests/testCancelledQueuedPreparationDoesNotReleaseCurrentModel', 'PreparedInspectionTests/testExplicitBaseParserRejectsAmbiguousOrUnalignedInputs', 'PreparedInspectionTests/testInvalidSelectionLeavesModelButFailedExplicitReplacementRemovesOldOnly', 'PreparedInspectionTests/testRejectedMetadataRelocationsAndMissingHashesPreserveSource', 'PreparedInspectionTests/testReplacementOldCloseAndStaleSourceCannotMutateNewModel', 'PreparedInspectionTests/testSourceCloseAndInventoryValidationLoadCascadeModelCleanup', 'SessionModelTests/testBackgroundCancelsPendingImport', 'SessionModelTests/testClearResetsState', 'SessionModelTests/testPickerCancellationIsNotError', 'SessionModelTests/testReplacedImportCannotOverwriteNewerInput', 'SessionModelTests/testStaleSuccessfulImportCannotRestoreClearedState', 'SessionModelTests/testUnrelatedErrorWithCancellationCodeIsShown', 'X18NativeTests/testFixedOwnedNativeMatrix', 'X18NativeTests/testTwoOwnedContextsRemainIndependent', 'X18NativeTests/testInvalidSelectorsNeverReturnCallableCode']
+          path=os.environ['RUNNER_TEMP']+'/native-tests.xcresult'
+          def get(kind): return json.loads(subprocess.check_output(['xcrun','xcresulttool','get','test-results',kind,'--path',path],timeout=40))
+          summary=get('summary')
+          assert summary.get('totalTestCount')==76 and summary.get('passedTests')==76
+          assert summary.get('failedTests')==0 and summary.get('skippedTests')==0 and summary.get('expectedFailures',0)==0
+          assert summary.get('result')=='Passed'
+          configs=summary.get('devicesAndConfigurations');assert isinstance(configs,list) and len(configs)==1
+          for config in configs:
+              d=config['device'];assert d.get('architecture')=='arm64' and d.get('platform')=='iOS Simulator' and d.get('deviceId')==os.environ['SIMULATOR_UDID']
+          log=Path(os.environ['RUNNER_TEMP'],'native-xctest.log').read_text()
+          pattern=r"^Test Case '-\[(?:Switch2IOSTests\.)?(\w+) (test\w+)\]' passed \([^\r\n]*\)\.\s*$"
+          passed=[a+'/'+b for a,b in re.findall(pattern,log,re.M)]
+          assert Counter(passed)==Counter(expected), 'Exact XCTest log method mismatch'
+          print(json.dumps({'summary':summary,'verified_methods':sorted(passed),'native_fixture_methods':3,'native_cases_expected':1728},indent=2))
+          print('PASS: 73 unchanged regression methods + 3 native fixture methods, exactly once; Simulator ARM64 only, not physical iPhone validation')
+          PY
