@@ -275,14 +275,21 @@ final class PreparedInspectionSessionModelTests: XCTestCase {
         let oldResult = prepared(source.token), newResult = prepared(source.token, base: 0x2000)
         let model = SessionModel(inventoryLoader: { _ in input }, inspectionLoader: { _, _ in source },
             inspectionCloser: { await ledger.source($0) }, preparationLoader: { _, _, base in
-                if base == 0x1000 { await gate.wait(); return oldResult }; return newResult
+                await ledger.enterLoader(base)
+                if base == 0x1000 { await gate.wait(); return oldResult }
+                let closed = await ledger.events()
+                XCTAssertTrue(closed.contains(.prepared(source.token, oldResult.token)))
+                return newResult
             }, preparationCloser: { await ledger.prepared($0, $1) })
         await model.importFolder(URL(fileURLWithPath: "/synthetic")).value
         await model.loadForInspection()!.value
         let old = model.prepareSelectedModule("main", baseText: "0x1000")!
         await gate.waitUntilStarted()
-        await model.prepareSelectedModule("main", baseText: "0x2000")!.value
-        await gate.release(); await old.value
+        let newer = model.prepareSelectedModule("main", baseText: "0x2000")!
+        let entered = await ledger.loaderEntries()
+        XCTAssertEqual(entered, [0x1000])
+        XCTAssertNil(model.preparedInspection)
+        await gate.release(); await old.value; await newer.value
         XCTAssertEqual(model.preparedInspection, newResult.report)
         XCTAssertEqual(model.loadedInspection, source.report)
         let events = await ledger.events()
@@ -297,16 +304,24 @@ final class PreparedInspectionSessionModelTests: XCTestCase {
         let model = SessionModel(inventoryLoader: { _ in input }, inspectionLoader: { url, _ in
             url.lastPathComponent == "old" ? oldSource : newSource
         }, inspectionCloser: { await ledger.source($0) }, preparationLoader: { token, _, _ in
-            if token == oldSource.token { await gate.wait(); return oldModel }; return newModel
+            await ledger.enterLoader(token == oldSource.token ? 0x1000 : 0x2000)
+            if token == oldSource.token { await gate.wait(); return oldModel }
+            let closed = await ledger.events()
+            XCTAssertTrue(closed.contains(.prepared(oldSource.token, oldModel.token)))
+            XCTAssertTrue(closed.contains(.source(oldSource.token)))
+            return newModel
         }, preparationCloser: { await ledger.prepared($0, $1) })
         await model.importFolder(URL(fileURLWithPath: "/old")).value
         await model.loadForInspection()!.value
         let old = model.prepareSelectedModule("main", baseText: "0x1000")!
         await gate.waitUntilStarted()
-        await model.importFolder(URL(fileURLWithPath: "/new")).value
+        let replacement = model.importFolder(URL(fileURLWithPath: "/new"))
+        let entered = await ledger.loaderEntries()
+        XCTAssertEqual(entered, [0x1000])
+        XCTAssertNil(model.loadedInspection)
+        await gate.release(); await old.value; await replacement.value
         await model.loadForInspection()!.value
         await model.prepareSelectedModule("main", baseText: "0x2000")!.value
-        await gate.release(); await old.value
         XCTAssertEqual(model.loadedInspection, newSource.report)
         XCTAssertEqual(model.preparedInspection, newModel.report)
         let events = await ledger.events()
@@ -350,10 +365,12 @@ final class PreparedInspectionSessionModelTests: XCTestCase {
         weak var weakModel = model
         model = nil
         XCTAssertNil(weakModel)
-        await ledger.waitForSource(source.token)
+        let beforeRelease = await ledger.events()
+        XCTAssertTrue(beforeRelease.isEmpty)
         await gate.release(); await operation.value
+        await ledger.waitForSource(source.token)
         let events = await ledger.events()
-        XCTAssertEqual(events, [.source(source.token), .prepared(source.token, result.token)])
+        XCTAssertEqual(events, [.prepared(source.token, result.token), .source(source.token)])
     }
 
     func testWrongSourceProviderCleanupCannotSetErrorOnNewGeneration() async {
@@ -361,7 +378,11 @@ final class PreparedInspectionSessionModelTests: XCTestCase {
         let input = inventory(), source = source(), wrongResult = prepared(UUID()), goodResult = prepared(source.token, base: 0x2000)
         let model = SessionModel(inventoryLoader: { _ in input }, inspectionLoader: { _, _ in source },
             inspectionCloser: { await ledger.source($0) }, preparationLoader: { _, _, base in
-                base == 0x1000 ? wrongResult : goodResult
+                await ledger.enterLoader(base)
+                if base == 0x1000 { return wrongResult }
+                let closed = await ledger.events()
+                XCTAssertTrue(closed.contains(.prepared(wrongResult.sourceToken, wrongResult.token)))
+                return goodResult
             }, preparationCloser: { source, token in
                 if token == wrongResult.token { await cleanupGate.wait() }
                 await ledger.prepared(source, token)
@@ -370,8 +391,10 @@ final class PreparedInspectionSessionModelTests: XCTestCase {
         await model.loadForInspection()!.value
         let old = model.prepareSelectedModule("main", baseText: "0x1000")!
         await cleanupGate.waitUntilStarted()
-        await model.prepareSelectedModule("main", baseText: "0x2000")!.value
-        await cleanupGate.release(); await old.value
+        let newer = model.prepareSelectedModule("main", baseText: "0x2000")!
+        let entered = await ledger.loaderEntries()
+        XCTAssertEqual(entered, [0x1000])
+        await cleanupGate.release(); await old.value; await newer.value
         XCTAssertEqual(model.preparedInspection, goodResult.report)
         XCTAssertEqual(model.loadedInspection, source.report)
         XCTAssertNil(model.errorMessage)
@@ -405,6 +428,9 @@ final class PreparedInspectionSessionModelTests: XCTestCase {
 private actor PreparedCloseLedger {
     enum Event: Equatable { case prepared(UUID, UUID), source(UUID) }
     private var closed: [Event] = []
+    private var entered: [UInt64] = []
+    func enterLoader(_ base: UInt64) { entered.append(base) }
+    func loaderEntries() -> [UInt64] { entered }
     private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     func prepared(_ source: UUID, _ model: UUID) { closed.append(.prepared(source, model)) }
     func source(_ token: UUID) { closed.append(.source(token)); waiters.removeValue(forKey: token)?.resume() }

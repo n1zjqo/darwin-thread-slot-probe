@@ -4,4 +4,5 @@
 #include "s2i_dynamic.h"
 #include "s2i_module.h"
 #include "s2i_prepared.h"
+#include "s2i_link_plan.h"
 #endif

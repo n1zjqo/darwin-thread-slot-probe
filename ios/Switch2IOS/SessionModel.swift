@@ -9,21 +9,32 @@ final class SessionModel: ObservableObject {
     typealias InspectionCloser = @Sendable (UUID) async -> Void
     typealias PreparationLoader = @Sendable (UUID, String, UInt64) async throws -> PreparedInspectionSession
     typealias PreparationCloser = @Sendable (UUID, UUID) async -> Void
+    typealias LinkInventoryLoader = @Sendable (UUID) async throws -> LinkInspectionSession
+    typealias LinkInventoryCloser = @Sendable (UUID, UUID) async -> Void
     @Published private(set) var inventory: InputInventory?
     @Published private(set) var validation: PayloadValidationReport?
     @Published private(set) var loadedInspection: LoadedInspectionReport?
     @Published private(set) var preparedInspection: PreparedInspectionReport?
+    @Published private(set) var linkInspection: LinkInspectionReport?
+    @Published private(set) var isLinking = false
     @Published private(set) var isPreparing = false
     @Published private(set) var isImporting = false
     @Published private(set) var isValidating = false
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var isForeground = true
+    // Serializes worker completion AND numeric-result delivery/cleanup. Native
+    // actor isolation alone does not cover a detached result awaiting MainActor.
+    // This task carries no report/pointer; completed closures release their locals.
+    private var workBarrier: Task<Void, Never>?
     private var operationTask: Task<Void, Never>?
     private var generation = UUID()
     private var preparationTask: Task<Void, Never>?
     private var preparationGeneration = UUID()
     private var preparedIdentity: (source: UUID, token: UUID)?
+    private var linkTask: Task<Void, Never>?
+    private var linkGeneration = UUID()
+    private var linkIdentity: (source: UUID, token: UUID)?
     private var selectedFolder: URL?
     private var loadedToken: UUID?
     private let inventoryLoader: InventoryLoader
@@ -31,6 +42,8 @@ final class SessionModel: ObservableObject {
     private let inspectionCloser: InspectionCloser
     private let preparationLoader: PreparationLoader
     private let preparationCloser: PreparationCloser
+    private let linkInventoryLoader: LinkInventoryLoader
+    private let linkInventoryCloser: LinkInventoryCloser
 
     init(inventoryLoader: @escaping InventoryLoader = { try await InputWorkQueue.shared.inventory(folder: $0) },
          inspectionLoader: @escaping InspectionLoader = { try await InputWorkQueue.shared.loadForInspection(folder: $0, inventory: $1) },
@@ -40,12 +53,20 @@ final class SessionModel: ObservableObject {
          },
          preparationCloser: @escaping PreparationCloser = {
              await InputWorkQueue.shared.closePrepared(sourceToken: $0, token: $1)
+         },
+         linkInventoryLoader: @escaping LinkInventoryLoader = {
+             try await InputWorkQueue.shared.linkInventory(sourceToken: $0)
+         },
+         linkInventoryCloser: @escaping LinkInventoryCloser = {
+             await InputWorkQueue.shared.closeLinkInventory(sourceToken: $0, token: $1)
          }) {
         self.inventoryLoader = inventoryLoader
         self.inspectionLoader = inspectionLoader
         self.inspectionCloser = inspectionCloser
         self.preparationLoader = preparationLoader
         self.preparationCloser = preparationCloser
+        self.linkInventoryLoader = linkInventoryLoader
+        self.linkInventoryCloser = linkInventoryCloser
     }
 
     @discardableResult
@@ -59,7 +80,10 @@ final class SessionModel: ObservableObject {
         selectedFolder = nil
         isImporting = true
         let loader = inventoryLoader
+        let predecessor = workBarrier
         let task = Task { [weak self] in
+            await predecessor?.value
+            guard !Task.isCancelled, self?.generation == request else { return }
             let worker = Task.detached(priority: .userInitiated) { try await loader(url) }
             let result = await withTaskCancellationHandler(operation: { await worker.result }, onCancel: { worker.cancel() })
             guard let self = self, self.generation == request, !Task.isCancelled else { return }
@@ -74,6 +98,7 @@ final class SessionModel: ObservableObject {
             }
         }
         operationTask = task
+        workBarrier = task
         return task
     }
 
@@ -86,7 +111,10 @@ final class SessionModel: ObservableObject {
         validation = nil
         errorMessage = nil
         isValidating = true
+        let predecessor = workBarrier
         let task = Task { [weak self] in
+            await predecessor?.value
+            guard !Task.isCancelled, self?.generation == request else { return }
             let worker = Task.detached(priority: .userInitiated) {
                 try await InputWorkQueue.shared.validate(folder: folder, inventory: inventory)
             }
@@ -101,6 +129,7 @@ final class SessionModel: ObservableObject {
             }
         }
         operationTask = task
+        workBarrier = task
         return task
     }
 
@@ -115,7 +144,10 @@ final class SessionModel: ObservableObject {
         isLoading = true
         let loader = inspectionLoader
         let closer = inspectionCloser
+        let predecessor = workBarrier
         let task = Task { [weak self] in
+            await predecessor?.value
+            guard !Task.isCancelled, self?.generation == request else { return }
             let worker = Task.detached(priority: .userInitiated) { try await loader(folder, inventory) }
             let result = await withTaskCancellationHandler(operation: { await worker.result }, onCancel: { worker.cancel() })
             // A successful native load may race cancellation or UI deallocation. Its
@@ -135,6 +167,7 @@ final class SessionModel: ObservableObject {
             }
         }
         operationTask = task
+        workBarrier = task
         return task
     }
 
@@ -158,7 +191,10 @@ final class SessionModel: ObservableObject {
         errorMessage = nil
         let loader = preparationLoader
         let closer = preparationCloser
+        let predecessor = workBarrier
         let task = Task { [weak self] in
+            await predecessor?.value
+            guard !Task.isCancelled, self?.preparationGeneration == request else { return }
             let worker = Task.detached(priority: .userInitiated) {
                 try await loader(sourceToken, moduleName, base)
             }
@@ -185,6 +221,7 @@ final class SessionModel: ObservableObject {
             }
         }
         preparationTask = task
+        workBarrier = task
         return task
     }
 
@@ -196,24 +233,100 @@ final class SessionModel: ObservableObject {
         preparationTask = nil
         isPreparing = false
         preparedInspection = nil
-        guard let identity = preparedIdentity else { return nil }
+        guard let identity = preparedIdentity else { return workBarrier }
         preparedIdentity = nil
         let closer = preparationCloser
-        return Task { await closer(identity.source, identity.token) }
+        let predecessor = workBarrier
+        let task = Task {
+            await predecessor?.value
+            await closer(identity.source, identity.token)
+        }
+        workBarrier = task
+        return task
+    }
+
+    /// A separate explicit action. Uses every held module; takes no base or provider
+    /// choice, and neither releases nor weakens the existing prepared-model contract.
+    @discardableResult
+    func inspectBatchLinks() -> Task<Void, Never>? {
+        guard let sourceToken = loadedToken, loadedInspection != nil,
+              !isImporting, !isValidating, !isLoading else { return nil }
+        cancelLinkInventory() // Replace the prior numeric report, not the prepared image.
+        let request = UUID()
+        linkGeneration = request
+        isLinking = true
+        errorMessage = nil
+        let loader = linkInventoryLoader
+        let closer = linkInventoryCloser
+        let predecessor = workBarrier
+        let task = Task { [weak self] in
+            await predecessor?.value
+            guard !Task.isCancelled, self?.linkGeneration == request else { return }
+            let worker = Task.detached(priority: .userInitiated) { try await loader(sourceToken) }
+            let result = await withTaskCancellationHandler(operation: { await worker.result }, onCancel: { worker.cancel() })
+            guard let self = self, self.linkGeneration == request,
+                  self.loadedToken == sourceToken, !Task.isCancelled else {
+                if case .success(let session) = result { await closer(session.sourceToken, session.token) }
+                return
+            }
+            self.isLinking = false
+            self.linkTask = nil
+            switch result {
+            case .success(let session):
+                guard session.sourceToken == sourceToken else {
+                    await closer(session.sourceToken, session.token)
+                    if self.linkGeneration == request {
+                        self.errorMessage = LinkInspectionError.staleSource.localizedDescription
+                    }
+                    return
+                }
+                self.linkIdentity = (sourceToken, session.token)
+                self.linkInspection = session.report
+            case .failure(let error):
+                if !(error is CancellationError) { self.errorMessage = error.localizedDescription }
+            }
+        }
+        linkTask = task
+        workBarrier = task
+        return task
+    }
+
+    /// Invalidates late results and clears only the accepted copied inventory report.
+    @discardableResult
+    func cancelLinkInventory() -> Task<Void, Never>? {
+        linkGeneration = UUID()
+        linkTask?.cancel()
+        linkTask = nil
+        isLinking = false
+        linkInspection = nil
+        guard let identity = linkIdentity else { return workBarrier }
+        linkIdentity = nil
+        let closer = linkInventoryCloser
+        let predecessor = workBarrier
+        let task = Task {
+            await predecessor?.value
+            await closer(identity.source, identity.token)
+        }
+        workBarrier = task
+        return task
     }
 
     /// Release the exact accepted session; an older close cannot close a newer token.
     @discardableResult
     func closeLoadedInspection() -> Task<Void, Never>? {
-        let closePrepared = cancelPreparation()
+        cancelLinkInventory()
+        cancelPreparation()
         loadedInspection = nil
-        guard let token = loadedToken else { return closePrepared }
+        guard let token = loadedToken else { return workBarrier }
         loadedToken = nil
         let closer = inspectionCloser
-        return Task {
-            await closePrepared?.value
-            await closer(token) // The actor also enforces derived-before-source release.
+        let predecessor = workBarrier
+        let task = Task {
+            await predecessor?.value
+            await closer(token) // Actor also enforces derived-before-source release.
         }
+        workBarrier = task
+        return task
     }
 
     func reportPickerError(_ error: Error) {
@@ -249,11 +362,17 @@ final class SessionModel: ObservableObject {
     deinit {
         operationTask?.cancel()
         preparationTask?.cancel()
+        linkTask?.cancel()
+        let predecessor = workBarrier
+        let linked = linkIdentity
+        let closeLink = linkInventoryCloser
         let identity = preparedIdentity
         let source = loadedToken
         let closePrepared = preparationCloser
         let closeSource = inspectionCloser
         Task {
+            await predecessor?.value
+            if let linked = linked { await closeLink(linked.source, linked.token) }
             if let identity = identity { await closePrepared(identity.source, identity.token) }
             if let source = source { await closeSource(source) }
         }

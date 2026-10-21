@@ -141,14 +141,19 @@ final class SessionModelTests: XCTestCase {
         let gate = InventoryGate()
         let model = SessionModel(inventoryLoader: { url in
             if url.lastPathComponent == "old" { return try await gate.load() }
+            let finished = await gate.hasFinished()
+            XCTAssertTrue(finished)
+            await gate.enterNewLoader()
             return InputInventory(folderName: "new", modules: [], hasNPDM: false, warnings: [])
         })
         let old = model.importFolder(URL(fileURLWithPath: "/old"))
         await gate.waitUntilStarted()
         let newer = model.importFolder(URL(fileURLWithPath: "/new"))
-        await newer.value
+        let startedNew = await gate.newLoaderEntries()
+        XCTAssertEqual(startedNew, 0)
+        XCTAssertNil(model.inventory)
         await gate.finish()
-        await old.value
+        await old.value; await newer.value
         XCTAssertEqual(model.inventory?.folderName, "new")
         XCTAssertFalse(model.isImporting)
     }
@@ -164,6 +169,11 @@ final class SessionModelTests: XCTestCase {
 private actor InventoryGate {
     private var waiting: CheckedContinuation<InputInventory, Error>?
     private var started: CheckedContinuation<Void, Never>?
+    private var finished = false
+    private var newEntries = 0
+    func hasFinished() -> Bool { finished }
+    func enterNewLoader() { newEntries += 1 }
+    func newLoaderEntries() -> Int { newEntries }
     func load() async throws -> InputInventory {
         try await withCheckedThrowingContinuation { continuation in
             waiting = continuation
@@ -176,6 +186,7 @@ private actor InventoryGate {
         await withCheckedContinuation { started = $0 }
     }
     func finish() {
+        finished = true
         waiting?.resume(returning: InputInventory(folderName: "old", modules: [], hasNPDM: false, warnings: []))
         waiting = nil
     }

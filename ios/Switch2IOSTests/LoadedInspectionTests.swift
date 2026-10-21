@@ -162,17 +162,29 @@ final class LoadedInspectionSessionModelTests: XCTestCase {
         let ledger = ClosedInspectionTokens()
         let oldResult = session(ownedBytes: 1), newResult = session(ownedBytes: 2)
         let input = inventory()
-        let model = SessionModel(inventoryLoader: { _ in input }, inspectionLoader: { url, _ in
+        let model = SessionModel(inventoryLoader: { url in
+            if url.lastPathComponent == "new" {
+                let closed = await ledger.tokens()
+                XCTAssertEqual(closed, [oldResult.token])
+            }
+            await ledger.enterInventory(url.lastPathComponent)
+            return input
+        }, inspectionLoader: { url, _ in
             if url.lastPathComponent == "old" { await gate.wait(); return oldResult }
+            let closed = await ledger.tokens()
+            XCTAssertEqual(closed, [oldResult.token])
             return newResult
         }, inspectionCloser: { await ledger.close($0) })
         await model.importFolder(URL(fileURLWithPath: "/old")).value
         let old = model.loadForInspection()!
         await gate.waitUntilStarted()
-        await model.importFolder(URL(fileURLWithPath: "/new")).value
-        await model.loadForInspection()!.value
+        let replacement = model.importFolder(URL(fileURLWithPath: "/new"))
+        let entered = await ledger.inventoryEntries()
+        XCTAssertEqual(entered, ["old"])
+        XCTAssertNil(model.loadedInspection)
         await gate.release()
-        await old.value
+        await old.value; await replacement.value
+        await model.loadForInspection()!.value
         XCTAssertEqual(model.loadedInspection, newResult.report)
         let closed = await ledger.tokens()
         XCTAssertEqual(closed, [oldResult.token])
@@ -216,6 +228,9 @@ private actor InspectionTestGate {
 
 private actor ClosedInspectionTokens {
     private var closed: [UUID] = []
+    private var entered: [String] = []
+    func enterInventory(_ name: String) { entered.append(name) }
+    func inventoryEntries() -> [String] { entered }
     private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     func close(_ token: UUID) { closed.append(token); waiters.removeValue(forKey: token)?.resume() }
     func tokens() -> [UUID] { closed }

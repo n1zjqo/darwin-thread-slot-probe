@@ -78,6 +78,8 @@ actor InputWorkQueue {
     static let reportReservationPerModule = 4096
     private var retained: InspectionBatchOwner?
     private var prepared: PreparedImageOwner?
+    // The native plan is transient; only this bounded value report is retained.
+    private var linked: LinkInspectionSession?
     private let workingByteLimit: Int
 
     // A lower limit is useful for deterministic integration tests; callers cannot
@@ -88,6 +90,7 @@ actor InputWorkQueue {
     }
 
     private func releaseInspection() {
+        linked = nil // No native plan can survive the synchronous inventory call.
         prepared = nil // Derived storage is always released before its source batch.
         retained = nil
     }
@@ -162,7 +165,8 @@ actor InputWorkQueue {
         guard guestBase % 4096 == 0 else { throw PreparedInspectionError.invalidBase }
         prepared = nil // Explicit replacement frees the old model before allocating another.
         let budget = try PreparedInspectionBudget.calculate(
-            sourceOwned: source.report.ownedBytes, sourceReport: source.report.reservedReportBytes,
+            sourceOwned: source.report.ownedBytes,
+            sourceReport: source.report.reservedReportBytes + (linked?.report.reservedReportBytes ?? 0),
             selectedOwned: source.report.modules[index].ownedBytes, limit: workingByteLimit)
         var options = s2i_prepared_default_options()
         options.other_live_bytes = budget.otherLive
@@ -208,6 +212,88 @@ actor InputWorkQueue {
     }
 
     func retainedPreparedSession() -> PreparedInspectionSession? { prepared?.session }
+
+    /// Explicit read-only inventory over the ENTIRE already-owned module batch.
+    /// No await in this method. Every borrowed handle stays local, and defer destroys
+    /// the native plan before this call returns, throws, or any source can be replaced.
+    /// The prepared image is never silently released to make this operation fit.
+    func linkInventory(sourceToken: UUID) throws -> LinkInspectionSession {
+        try Task.checkCancellation()
+        guard let source = retained, source.token == sourceToken else { throw LinkInspectionError.staleSource }
+        linked = nil // Explicit replacement of the old copied inventory report only.
+        let budget = try LinkInspectionBudget.calculate(
+            sourceOwned: source.report.ownedBytes, sourceReport: source.report.reservedReportBytes,
+            moduleCount: source.modules.count, preparedOwned: prepared?.session.report.ownedBytes ?? 0,
+            preparedReport: prepared?.session.report.reservedReportBytes ?? 0, limit: workingByteLimit)
+        var options = s2i_link_default_options()
+        options.other_live_bytes = budget.otherLive
+        options.max_peak_bytes = budget.maximumPeak
+        let handles = source.modules.map { $0.handle }
+        guard handles.allSatisfy({ $0 != nil }) else { throw LinkInspectionError.staleSource }
+        var native: OpaquePointer?
+        var nativeError = s2i_link_error()
+        defer { s2i_link_plan_destroy(&native) }
+        let status = handles.withUnsafeBufferPointer {
+            s2i_link_plan_create($0.baseAddress, $0.count, &options, &native, &nativeError)
+        }
+        guard status == S2I_LINK_OK, let pointer = native else {
+            if status == S2I_LINK_RESOURCE_LIMIT { throw LinkInspectionError.resourceLimit }
+            throw LinkInspectionError.native(String(cString: s2i_link_status_string(status)))
+        }
+        try Task.checkCancellation()
+        var summary = s2i_link_summary()
+        guard s2i_link_plan_get_summary(pointer, &summary) == S2I_LINK_OK,
+              summary.policy == S2I_LINK_POLICY_DEFERRED,
+              summary.module_count == source.modules.count,
+              summary.source_module_bytes == source.report.ownedBytes,
+              summary.other_live_bytes == budget.otherLive,
+              summary.report_bytes == budget.reportReservation,
+              summary.owned_bytes <= budget.maximumPeak,
+              summary.temporary_bytes <= budget.maximumPeak,
+              summary.creation_peak_bytes <= budget.maximumPeak,
+              summary.creation_peak_bytes == source.report.ownedBytes + budget.otherLive
+                + budget.reportReservation + summary.owned_bytes + summary.temporary_bytes else {
+            throw LinkInspectionError.native("原生摘要或预算不一致")
+        }
+        // Native size_t values are bounded by the API's immutable hard caps.
+        var reports: [LinkInspectionReport.Module] = []
+        for index in source.modules.indices {
+            try Task.checkCancellation()
+            var report = s2i_link_module_report()
+            guard s2i_link_plan_get_module(pointer, index, &report) == S2I_LINK_OK,
+                  report.policy == S2I_LINK_POLICY_DEFERRED,
+                  report.original_warnings == source.report.modules[index].warnings else {
+                throw LinkInspectionError.native("原始警告或模块报告不一致")
+            }
+            reports.append(.init(id: index, format: report.format.rawValue,
+                targets: report.targets.rawValue, inventory: report.inventory.rawValue,
+                policy: report.policy.rawValue, gnuHash: report.gnu_hash.rawValue,
+                originalWarnings: report.original_warnings, relaCount: report.rela_count,
+                jmprelCount: report.jmprel_count, symbolCount: report.symbol_count,
+                dependencyCount: report.dependency_count, unknownTagCount: report.unknown_tag_count))
+        }
+        let report = LinkInspectionReport(modules: reports, format: summary.format.rawValue,
+            targets: summary.targets.rawValue, inventory: summary.inventory.rawValue,
+            policy: summary.policy.rawValue, moduleCount: summary.module_count,
+            relocationCount: summary.relocation_count, candidateCount: summary.candidate_count,
+            symbolCount: summary.symbol_count, sourceModuleBytes: summary.source_module_bytes,
+            ownedBytes: summary.owned_bytes, temporaryBytes: summary.temporary_bytes,
+            reservedReportBytes: summary.report_bytes, otherLiveBytes: summary.other_live_bytes,
+            creationPeakBytes: summary.creation_peak_bytes, nameWork: summary.name_work)
+        let session = LinkInspectionSession(sourceToken: sourceToken, token: UUID(), report: report)
+        try Task.checkCancellation()
+        linked = session
+        return session // defer destroys plan; no borrowed object leaves the actor call.
+    }
+
+    /// Copied report cleanup is source/token specific, including late cancellation.
+    func closeLinkInventory(sourceToken: UUID, token: UUID) {
+        guard retained?.token == sourceToken,
+              linked?.sourceToken == sourceToken, linked?.token == token else { return }
+        linked = nil
+    }
+
+    func retainedLinkSession() -> LinkInspectionSession? { linked }
 
     private static func loadModule(_ module: InputInventory.Module, rootFD: Int32,
                                    remaining: Int) throws -> (InspectionModuleOwner, LoadedInspectionReport.Module) {
