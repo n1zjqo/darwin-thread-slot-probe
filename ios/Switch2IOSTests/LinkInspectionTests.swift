@@ -342,8 +342,15 @@ private enum LinkSyntheticNSO {
         put(&text, 0x48, 0x4040 - 0x40)
         put(&text, 0x4c, 0x4060 - 0x40)
         var ro = Data(repeating: 0, count: 0x400)
-        let strings: [UInt8] = hasGNU ? [0] + Array("fixture".utf8) + [0] + Array("datum".utf8) + [0]
-                                         : [0] + Array("fixture".utf8) + [0]
+        let fixtureNameBytes: [UInt8] = Array("fixture".utf8)
+        var strings: [UInt8] = [0]
+        strings.append(contentsOf: fixtureNameBytes)
+        strings.append(0)
+        if hasGNU {
+            let symbolNameBytes: [UInt8] = Array("datum".utf8)
+            strings.append(contentsOf: symbolNameBytes)
+            strings.append(0)
+        }
         ro.replaceSubrange(0x200..<(0x200 + strings.count), with: strings)
         if hasGNU {
             // Null, undefined datum, defined datum. Neither import nor candidate is bound.

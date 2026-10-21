@@ -10,8 +10,8 @@ concurrency:
 jobs:
   loader:
     if: github.event_name == 'push' && github.repository == 'n1zjqo/darwin-thread-slot-probe' && github.event.repository.private
-      == false && github.ref == 'refs/heads/main' && github.run_number == 4 && github.run_attempt == 1 && github.event.before
-      == '227f19b43b9a04de87ec1d54c2d9e650cb7ad25e' && contains(github.event.head_commit.message, '[approved-link-inventory-apple-once4-20261021]')
+      == false && github.ref == 'refs/heads/main' && github.run_number == 5 && github.run_attempt == 1 && github.event.before
+      == 'f72a7e495c5be1cccab884a7d99c64097daee9c0' && contains(github.event.head_commit.message, '[approved-link-inventory-apple-once5-20261021]')
     runs-on: macos-15
     timeout-minutes: 20
     defaults:
@@ -36,8 +36,8 @@ jobs:
         python3 - <<'PY'
         import os, subprocess, hashlib
         from pathlib import Path
-        base = '227f19b43b9a04de87ec1d54c2d9e650cb7ad25e'
-        base_tree = '4807bd8898c3afaab3635d26eee87f51b9851f67'
+        base = 'f72a7e495c5be1cccab884a7d99c64097daee9c0'
+        base_tree = '86a3059b13ef2d8f4c5d9ac72a4a8396a3a16f4e'
         source_hashes = {'ios/Switch2IOS.xcodeproj/project.pbxproj': 'f70c4567d8698125370aeded12a34ac7016b86867381f3426899d45142a76edc',
          'ios/Switch2IOS.xcodeproj/xcshareddata/xcschemes/Switch2IOS.xcscheme': 'a2f7b889b8f09938592fa074464556f7e8a42ed3294d2d61164fd1e3eaf02dcc',
          'ios/Switch2IOS/ContentView.swift': '555f43db4f0711e264ad5896d9e471e24fb7cdef525909061ebe6d4e43e10d81',
@@ -51,7 +51,7 @@ jobs:
          'ios/Switch2IOS/SessionModel.swift': '5beb7131567573243570e629cfb894e188c9d66ef79765dd962b7e0632d248bd',
          'ios/Switch2IOS/Switch2IOSApp.swift': '7060a9ad9a98a8bf0c81a43e02bb553fa9892e3f495d44d000bc9045f61bda3f',
          'ios/Switch2IOSTests/InputInventoryTests.swift': 'feae74912f8d8c95650c1ad8563589b623adb24d48587bdf514327ebd01dced7',
-         'ios/Switch2IOSTests/LinkInspectionTests.swift': '69a2e5f2ec230f291227999965a021788c85c9de07f20a7a5255b06321d2b12e',
+         'ios/Switch2IOSTests/LinkInspectionTests.swift': '61658f273d84ddcc41346cb26636c402f453b33802337dcd973f039e8327862f',
          'ios/Switch2IOSTests/LoadedInspectionTests.swift': '42ffc911db258c02509cd7601c35893e9b42973c42bd8d83465e27d7c25d0a88',
          'ios/Switch2IOSTests/PreparedInspectionTests.swift': 'b4172e31220c6f508ebbb83cbce4e3d13caace5790f24f0fe132702bc727a8a0',
          'runtime/include/s2i_dynamic.h': '0c2b31bcf19bef420274606a029873afa0b3a877c0b706c8f876aa1c10bcd2a0',
@@ -87,19 +87,7 @@ jobs:
          'thread-context/tests/test_cpp_linkage.cpp': '1164da6186a23c034c19eaa2d086ef718816d0bb',
          'thread-context/tests/test_slot_candidate.c': '985d15df6f7c12c91dd7c5fd3f38a7c95e9de8f0',
          'thread-context/tests/test_thread_context.c': 'a44684c777e184d71848f872b5caf51b1161e68e'}
-        expected_changes = ['A\tios/Switch2IOS/LinkInspection.swift',
-         'A\tios/Switch2IOSTests/LinkInspectionTests.swift',
-         'A\truntime/include/s2i_link_plan.h',
-         'A\truntime/src/s2i_link_plan.c',
-         'M\t.github/workflows/loader-apple-once.yml',
-         'M\tios/Switch2IOS.xcodeproj/project.pbxproj',
-         'M\tios/Switch2IOS/ContentView.swift',
-         'M\tios/Switch2IOS/LoadedInspection.swift',
-         'M\tios/Switch2IOS/RuntimeBridge.h',
-         'M\tios/Switch2IOS/SessionModel.swift',
-         'M\tios/Switch2IOSTests/InputInventoryTests.swift',
-         'M\tios/Switch2IOSTests/LoadedInspectionTests.swift',
-         'M\tios/Switch2IOSTests/PreparedInspectionTests.swift']
+        expected_changes = ['M\t.github/workflows/loader-apple-once.yml', 'M\tios/Switch2IOSTests/LinkInspectionTests.swift']
         workflow = '.github/workflows/loader-apple-once.yml'
         sha = os.environ['GITHUB_SHA']
         def git(*args):
@@ -122,7 +110,7 @@ jobs:
             raise SystemExit('Expected exactly 50 approved files.')
         changes = git('diff', '--name-status', '--no-renames', base, sha).decode().splitlines()
         if len(changes) != len(expected_changes) or set(changes) != set(expected_changes):
-            raise SystemExit('Only the exact four additions and nine modifications may change.')
+            raise SystemExit('Only the exact test-source and workflow modifications may change.')
         for name, blob in original_blobs.items():
             if actual[name] != blob:
                 raise SystemExit('Original probe/context content changed: ' + name)
@@ -130,7 +118,7 @@ jobs:
             path = Path(name)
             if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash:
                 raise SystemExit('Frozen source content mismatch: ' + name)
-        print('source_boundary PASS: 26 frozen source hashes, exact 4 additions/9 modifications, 50 files, 23 untouched originals')
+        print('source_boundary PASS: 26 frozen source hashes, exact 2 modifications, 50 files, 23 untouched originals')
         PY
     - name: Build unsigned iPhoneOS app target
       timeout-minutes: 6
