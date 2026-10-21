@@ -1,0 +1,190 @@
+import Foundation
+import Darwin
+
+/// Value-only report: no native pointers, borrowed names, or executable addresses.
+struct LoadedInspectionReport: Equatable, Sendable {
+    struct Module: Equatable, Identifiable, Sendable {
+        var id: String { name }
+        let name: String
+        let decodedBytes: UInt64
+        let ownedBytes: Int
+        let verifiedHashSegments: Int
+        let dependencyCount: Int
+        let symbolCount: Int
+        let importCount: Int
+        let exportCount: Int
+        let warnings: UInt32
+        let dependenciesComplete: Bool
+        let importsComplete: Bool
+    }
+    let modules: [Module]
+    let ownedBytes: Int
+    let reservedReportBytes: Int
+}
+
+struct LoadedInspectionSession: Equatable, Sendable {
+    let token: UUID
+    let report: LoadedInspectionReport
+}
+
+enum LoadedInspectionError: LocalizedError {
+    case invalidInventory, resourceLimit(String), native(String, String)
+    var errorDescription: String? {
+        switch self {
+        case .invalidInventory: return "输入清单无效，请重新选择已提取的 ExeFS 文件夹。"
+        case .resourceLimit(let name): return "\(name) 超出加载诊断预算：单文件最多 64 MiB；全部驻留模块、当前输入及报告预留合计最多 96 MiB。"
+        case .native(let name, let detail): return "\(name) 加载诊断失败：\(detail)"
+        }
+    }
+}
+
+/// An actor-owned, non-Sendable RAII owner. No handle leaves InputWorkQueue.
+/// The native object has no OS-thread affinity; all access is externally serialized.
+private final class InspectionModuleOwner {
+    var handle: OpaquePointer?
+    init(_ handle: OpaquePointer) { self.handle = handle }
+    deinit { s2i_module_destroy(&handle) }
+}
+
+private final class InspectionBatchOwner {
+    let token = UUID()
+    let modules: [InspectionModuleOwner]
+    let report: LoadedInspectionReport
+    init(modules: [InspectionModuleOwner], report: LoadedInspectionReport) {
+        self.modules = modules
+        self.report = report
+    }
+}
+
+/// Serial ownership, not OS-thread affinity. No tc_bind or TLS association is used.
+/// Native load methods are synchronous: no actor reentrancy while handles are accessed.
+actor InputWorkQueue {
+    static let shared = InputWorkQueue()
+    static let maximumFileBytes = 64 * 1024 * 1024
+    static let maximumWorkingBytes = 96 * 1024 * 1024
+    // Fixed, conservative admission charge for each bounded numeric Swift report,
+    // handle/list bookkeeping and fixed allowlisted module name. No arbitrary names
+    // or symbol strings are copied. This is not a process RSS/allocator-overhead cap.
+    static let reportReservationPerModule = 4096
+    private var retained: InspectionBatchOwner?
+
+    func inventory(folder: URL) throws -> InputInventory {
+        try Task.checkCancellation()
+        retained = nil
+        return try InputInventoryReader.read(folder: folder)
+    }
+
+    func validate(folder: URL, inventory: InputInventory) throws -> PayloadValidationReport {
+        try Task.checkCancellation()
+        retained = nil
+        return try PayloadValidator.validate(folder: folder, inventory: inventory)
+    }
+
+    /// Replaces any previous session before allocation; failure leaves no retained batch.
+    /// A successful result is diagnostic only, even when both completeness flags are true.
+    func loadForInspection(folder: URL, inventory: InputInventory) throws -> LoadedInspectionSession {
+        try Task.checkCancellation()
+        retained = nil
+        let names = inventory.modules.map(\.name)
+        let allowed = Set(InputInventoryReader.moduleNames)
+        guard !names.isEmpty, names.count <= allowed.count, Set(names).count == names.count,
+              names.contains("main"), names.allSatisfy({ allowed.contains($0) }) else {
+            throw LoadedInspectionError.invalidInventory
+        }
+        let reportReservation = names.count * Self.reportReservationPerModule
+        let access = folder.startAccessingSecurityScopedResource()
+        defer { if access { folder.stopAccessingSecurityScopedResource() } }
+        let current = try InputInventoryReader.read(folder: folder)
+        guard current.modules == inventory.modules else { throw PayloadValidationError.changedInputs }
+        let batch = try withExeFSDescriptor(folder: folder) { rootFD -> InspectionBatchOwner in
+            var owners: [InspectionModuleOwner] = []
+            var reports: [LoadedInspectionReport.Module] = []
+            var ownedBytes = 0
+            for module in inventory.modules {
+                try Task.checkCancellation()
+                let remaining = Self.maximumWorkingBytes - reportReservation - ownedBytes
+                guard remaining > 0 else { throw LoadedInspectionError.resourceLimit(module.name) }
+                // Input Data dies on return, before the next module's input is allocated.
+                let loaded = try Self.loadModule(module, rootFD: rootFD, remaining: remaining)
+                owners.append(loaded.0)
+                reports.append(loaded.1)
+                ownedBytes += loaded.1.ownedBytes // loadModule proved this fits remaining.
+            }
+            try Task.checkCancellation()
+            return InspectionBatchOwner(modules: owners, report: .init(
+                modules: reports, ownedBytes: ownedBytes, reservedReportBytes: reportReservation))
+        }
+        try Task.checkCancellation()
+        retained = batch
+        return LoadedInspectionSession(token: batch.token, report: batch.report)
+    }
+
+    /// Idempotent and token-specific: stale completion cleanup cannot close a newer batch.
+    func close(token: UUID) {
+        guard retained?.token == token else { return }
+        retained = nil
+    }
+
+    /// Value-only lifecycle observation used by the app integration tests.
+    func retainedToken() -> UUID? { retained?.token }
+
+    private static func loadModule(_ module: InputInventory.Module, rootFD: Int32,
+                                   remaining: Int) throws -> (InspectionModuleOwner, LoadedInspectionReport.Module) {
+        let descriptor = openat(rootFD, module.name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard descriptor >= 0 else { throw InventoryError.unsafeEntry(module.name) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+              info.st_size == module.byteCount, info.st_size >= 256 else {
+            throw PayloadValidationError.changedInputs
+        }
+        guard info.st_size <= Int64(maximumFileBytes), info.st_size <= Int64(remaining) else {
+            throw LoadedInspectionError.resourceLimit(module.name)
+        }
+        let bytes = try readExactBytes(descriptor: descriptor, count: Int(info.st_size), requireEOF: true)
+        try Task.checkCancellation()
+        var options = s2i_module_default_options()
+        options.max_file_bytes = maximumFileBytes
+        options.max_owned_bytes = remaining
+        options.max_peak_bytes = remaining
+        var native: OpaquePointer?
+        var nativeError = s2i_module_error()
+        defer { s2i_module_destroy(&native) }
+        let status = bytes.withUnsafeBytes { input in
+            s2i_module_load(input.bindMemory(to: UInt8.self).baseAddress, bytes.count,
+                            &options, &native, &nativeError)
+        }
+        guard status == S2I_MODULE_OK, let pointer = native else {
+            if status == S2I_MODULE_RESOURCE_LIMIT { throw LoadedInspectionError.resourceLimit(module.name) }
+            let detail: String
+            if status == S2I_MODULE_NSO_ERROR {
+                detail = nativeStatusDescription(nativeError.nso_status)
+            } else if status == S2I_MODULE_DYNAMIC_ERROR {
+                detail = String(cString: s2i_dynamic_status_string(nativeError.dynamic_status))
+            } else {
+                detail = String(cString: s2i_module_status_string(status))
+            }
+            throw LoadedInspectionError.native(module.name, detail)
+        }
+        try Task.checkCancellation()
+        var summary = s2i_module_summary()
+        guard s2i_module_get_summary(pointer, &summary) == S2I_MODULE_OK,
+              summary.owned_bytes <= remaining,
+              summary.load_peak_bytes <= remaining else {
+            throw LoadedInspectionError.native(module.name, "原生对象摘要或预算不一致")
+        }
+        let segments = [summary.plan.segments.0, summary.plan.segments.1, summary.plan.segments.2]
+        let report = LoadedInspectionReport.Module(
+            name: module.name, decodedBytes: summary.plan.decoded_size, ownedBytes: summary.owned_bytes,
+            verifiedHashSegments: segments.filter { $0.hash_required != 0 }.count,
+            dependencyCount: summary.dependency_count, symbolCount: summary.symbol_count,
+            importCount: summary.import_count, exportCount: summary.export_count,
+            warnings: summary.warnings, dependenciesComplete: summary.dependencies_complete != 0,
+            importsComplete: summary.imports_complete != 0)
+        let owner = InspectionModuleOwner(pointer)
+        native = nil
+        return (owner, report)
+    }
+}

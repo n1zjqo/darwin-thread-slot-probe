@@ -1,0 +1,115 @@
+name: One approved owned-loader Apple validation
+'on':
+  push:
+    branches:
+    - main
+permissions: {}
+concurrency:
+  group: approved-loader-apple-once-20261021
+  cancel-in-progress: false
+jobs:
+  loader:
+    if: github.event_name == 'push' && github.repository == 'n1zjqo/darwin-thread-slot-probe' && github.event.repository.private
+      == false && github.ref == 'refs/heads/main' && github.run_number == 1 && github.run_attempt == 1
+      && github.event.before == '1cedfe0f63bbed4ad479dacad800acf2ece50223' && contains(github.event.head_commit.message,
+      '[approved-loader-apple-once-20261021]')
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Fetch and verify exact approved source boundary
+      timeout-minutes: 2
+      env:
+        GIT_TERMINAL_PROMPT: '0'
+        GIT_ASKPASS: /usr/bin/false
+        GIT_CONFIG_GLOBAL: /dev/null
+        GIT_CONFIG_NOSYSTEM: '1'
+      run: |-
+        set -euo pipefail
+        test "$(uname -m)" = arm64
+        test "$RUNNER_ARCH" = ARM64
+        git init .
+        git -c credential.helper= -c core.askPass= -c http.extraHeader= fetch --no-tags --depth=2 https://github.com/n1zjqo/darwin-thread-slot-probe.git "$GITHUB_SHA"
+        git checkout --detach FETCH_HEAD
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        python3 - <<'PY'
+        import os, subprocess, hashlib
+        from pathlib import Path
+        base = '1cedfe0f63bbed4ad479dacad800acf2ece50223'
+        sha = os.environ['GITHUB_SHA']
+        original = {'thread-context/include/thread_context.h', 'thread-context/Makefile', 'thread-context/README.md', '.github/workflows/context-once.yml', 'thread-context/.gitignore', 'thread-context/tests/test_slot_candidate.c', 'thread-context/tests/test_cpp_linkage.cpp', 'thread-context/docs/INTEGRATION_GATES.md', 'README.md', 'thread-context/src/thread_context.c', 'probe.c', 'thread-context/review-tests/stress.c', '.github/workflows/probe-once.yml', 'thread-context/src/slot_candidate.h', 'thread-context/review-tests/cpp_backend.cpp', 'slot_contract.h', 'thread-context/include/thread_context_backend.h', 'thread-context/review-tests/run_review.sh', 'test_slot_contract.c', 'thread-context/docs/VALIDATION.md', 'thread-context/tests/test_thread_context.c', 'thread-context/review-tests/README.md', 'thread-context/review-tests/cancel_transition.c'}
+        additions = {'ios/Switch2IOSTests/InputInventoryTests.swift', 'ios/Switch2IOS.xcodeproj/xcshareddata/xcschemes/Switch2IOS.xcscheme', 'runtime/src/s2i_module.c', 'ios/Switch2IOS/InputInventory.swift', 'ios/Switch2IOSTests/LoadedInspectionTests.swift', 'runtime/src/s2i_nso.c', 'ios/Switch2IOS/Info.plist', 'ios/Switch2IOS/LoadedInspection.swift', 'runtime/include/s2i_dynamic.h', 'runtime/include/s2i_nso.h', '.github/workflows/loader-apple-once.yml', 'ios/Switch2IOS/Switch2IOSApp.swift', 'runtime/include/s2i_module.h', 'ios/Switch2IOS/RuntimeBridge.h', 'ios/Switch2IOS.xcodeproj/project.pbxproj', 'ios/Switch2IOS/ContentView.swift', 'ios/Switch2IOS/SessionModel.swift', 'ios/Switch2IOS/PayloadValidator.swift', 'runtime/src/s2i_dynamic.c'}
+        def git(*args):
+            return subprocess.check_output(['git', *args])
+        if git('rev-list', '--parents', '-n', '1', sha).decode().split() != [sha, base]:
+            raise SystemExit('Expected sole parent at approved base.')
+        expected = original | additions
+        entries = [e for e in git('ls-tree', '-r', '-z', sha).split(b'\0') if e]
+        actual = {e.split(b'\t', 1)[1].decode() for e in entries}
+        if actual != expected or len(entries) != 42:
+            raise SystemExit('Expected exactly 42 approved source files.')
+        if set(git('diff', '--name-status', '--no-renames', base, sha).decode().splitlines()) != {'A\t'+p for p in additions}:
+            raise SystemExit('Only the 19 approved additions may change.')
+        if any(e.split(b' ', 1)[0] not in (b'100644', b'100755') for e in entries):
+            raise SystemExit('Non-regular source entry.')
+        source_hashes = {'ios/Switch2IOS.xcodeproj/project.pbxproj': 'bccdac3967f28a0553c5cd91319f7fef29375cc5971d7c24faa35f9614b195df', 'ios/Switch2IOS.xcodeproj/xcshareddata/xcschemes/Switch2IOS.xcscheme': 'a2f7b889b8f09938592fa074464556f7e8a42ed3294d2d61164fd1e3eaf02dcc', 'ios/Switch2IOS/ContentView.swift': '311b044c15219818bbd11bdf1214683339ac1e1af2b031139610b2777e9d2bf1', 'ios/Switch2IOS/Info.plist': 'b1b8e51c4340370ce9ae4c7942a984f2af04e422af11670fb9968fb86f5b7629', 'ios/Switch2IOS/InputInventory.swift': 'dba26b2752ad49d7bb19285011515f606661eec7ce1221f70da069de8ddc6cc8', 'ios/Switch2IOS/LoadedInspection.swift': '94a7a68c6e3570f2a8faad19cb6e73a82ab12f7b78438be160c391513e9cce31', 'ios/Switch2IOS/PayloadValidator.swift': '51c2ce618a9e2af832b88f3ae74929b7a8aabac9dfe774969dcf0ad3892f5c97', 'ios/Switch2IOS/RuntimeBridge.h': 'aa234950e0ff7fb6b4c9dc6ec741189fd4ce6d605ac807ef1740f296c7cdbd3f', 'ios/Switch2IOS/SessionModel.swift': '7b171722078a0e887d56b8e58b2a35977d08663845beb5c9eaa4e3ba4d5a17d6', 'ios/Switch2IOS/Switch2IOSApp.swift': '7060a9ad9a98a8bf0c81a43e02bb553fa9892e3f495d44d000bc9045f61bda3f', 'ios/Switch2IOSTests/InputInventoryTests.swift': '712c63e1d90bdc8548915b91952d0b009d07757081bd5e6273ed110f0d5ff533', 'ios/Switch2IOSTests/LoadedInspectionTests.swift': '1be2980d1f8df40dc53fba654519d149f7c3e5e028f2177529960595e43031ed', 'runtime/include/s2i_dynamic.h': '66352e661c89054672c2b50358d0340e4d4a8237a18a90961632c61e0394270c', 'runtime/include/s2i_module.h': '08c3e26289e2e4e5136817ef894a7bd372b15ce8d7cc7119cec03d46585359f3', 'runtime/include/s2i_nso.h': '7bca941a0c1126fe634b47099520308c263917422a1dc44f5b084053667de748', 'runtime/src/s2i_dynamic.c': '8901033a2c82f57aa47da8d083a6206553a7f134feb3e1aa448286055e351eae', 'runtime/src/s2i_module.c': '4fecd9078c06574b0e5fa0e86052ea035e16ef9567cccdefc7d3e4dc5848628a', 'runtime/src/s2i_nso.c': '6e11b2a4fe08b4c787f304f389389898d3e88a3e6410d2b29a1d49cc85bb1675'}
+        for name, expected_hash in source_hashes.items():
+            if hashlib.sha256(Path(name).read_bytes()).hexdigest() != expected_hash:
+                raise SystemExit("Frozen source content mismatch: " + name)
+        print('source_boundary PASS: 18 app/runtime files, one workflow, 23 unchanged originals')
+        PY
+    - name: Select only a preinstalled available iPhone simulator
+      timeout-minutes: 1
+      run: |-
+        set -euo pipefail
+        sw_vers
+        xcodebuild -version
+        xcrun --sdk iphoneos --show-sdk-version
+        python3 - <<'PY'
+        import json, os, subprocess
+        runtimes = json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json'], timeout=20))['runtimes']
+        ios = {r['identifier'] for r in runtimes if r.get('isAvailable') and r['identifier'].startswith('com.apple.CoreSimulator.SimRuntime.iOS-')}
+        devices = json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','--json'], timeout=20))['devices']
+        candidates = [(runtime, d['name'], d['udid']) for runtime, ds in devices.items() if runtime in ios for d in ds if d.get('isAvailable') and d['name'].startswith('iPhone')]
+        if not candidates:
+            raise SystemExit('No preinstalled available iPhone simulator; no downloads permitted.')
+        runtime, name, udid = sorted(candidates)[-1]
+        print(f'Using preinstalled {name}: {runtime}, {udid}')
+        with open(os.environ['GITHUB_ENV'], 'a') as f:
+            f.write(f'SIMULATOR_UDID={udid}\n')
+        PY
+    - name: Build unsigned iPhoneOS app target
+      timeout-minutes: 6
+      run: |-
+        set -euo pipefail
+        python3 - <<'PY'
+        import os, subprocess
+        args = ['xcodebuild', '-project', 'ios/Switch2IOS.xcodeproj', '-scheme', 'Switch2IOS', '-configuration', 'Debug', '-disableAutomaticPackageResolution', '-skipPackageUpdates', 'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'CODE_SIGN_IDENTITY=', 'DEVELOPMENT_TEAM='] + ['-sdk','iphoneos','-destination','generic/platform=iOS','-derivedDataPath',os.environ['RUNNER_TEMP']+'/loader-device','build']
+        subprocess.run(args, check=True, timeout=330)
+        PY
+    - name: Build and run actual simulator XCTest
+      timeout-minutes: 9
+      run: |-
+        set -euo pipefail
+        python3 - <<'PY'
+        import os, subprocess
+        args = ['xcodebuild', '-project', 'ios/Switch2IOS.xcodeproj', '-scheme', 'Switch2IOS', '-configuration', 'Debug', '-disableAutomaticPackageResolution', '-skipPackageUpdates', 'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'CODE_SIGN_IDENTITY=', 'DEVELOPMENT_TEAM='] + ['-sdk','iphonesimulator','-destination','platform=iOS Simulator,id='+os.environ['SIMULATOR_UDID'],'-destination-timeout','60','-derivedDataPath',os.environ['RUNNER_TEMP']+'/loader-simulator','-resultBundlePath',os.environ['RUNNER_TEMP']+'/loader-tests.xcresult','-parallel-testing-enabled','NO','-maximum-concurrent-test-simulator-destinations','1','-test-timeouts-enabled','YES','-default-test-execution-time-allowance','30','-maximum-test-execution-time-allowance','60','test']
+        subprocess.run(args, check=True, timeout=510)
+        PY
+    - name: Verify nonempty passing XCTest result
+      timeout-minutes: 1
+      run: |-
+        set -euo pipefail
+        python3 - <<'PY'
+        import json, os, subprocess
+        path = os.environ['RUNNER_TEMP']+'/loader-tests.xcresult'
+        summary = json.loads(subprocess.check_output(['xcrun','xcresulttool','get','test-results','summary','--path',path], timeout=30))
+        print(json.dumps(summary, indent=2))
+        if (summary.get('totalTestCount') != 28 or summary.get('passedTests') != 28
+            or summary.get('failedTests') != 0 or summary.get('skippedTests') != 0
+            or summary.get('expectedFailures', 0) != 0):
+            raise SystemExit('Require all 28 XCTest methods passed, zero failed or skipped; unknown schema fails closed.')
+        print('Actual simulator XCTest execution verified; device target built unsigned. No upload or deployment.')
+        PY
