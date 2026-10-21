@@ -1,0 +1,179 @@
+name: One approved owned-context validation
+
+'on':
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: approved-thread-context-once-20261021
+  cancel-in-progress: false
+
+jobs:
+  context:
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'n1zjqo/darwin-thread-slot-probe' &&
+      github.event.repository.private == false &&
+      github.ref == 'refs/heads/main' &&
+      github.run_number == 1 &&
+      github.run_attempt == 1 &&
+      github.event.before == 'caa7e507fdcee81e3df4a7cd721cdb31f5a54f54' &&
+      contains(github.event.head_commit.message, '[approved-thread-context-once-20261021]')
+    runs-on: macos-15
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Fetch and verify the exact approved public source boundary
+        timeout-minutes: 2
+        env:
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_ASKPASS: /usr/bin/false
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: '1'
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$RUNNER_ARCH" = ARM64
+          git init .
+          git -c credential.helper= -c core.askPass= -c http.extraHeader= \
+            fetch --no-tags --depth=2 \
+            https://github.com/n1zjqo/darwin-thread-slot-probe.git "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 - <<'PY'
+          import os
+          import subprocess
+
+          base = 'caa7e507fdcee81e3df4a7cd721cdb31f5a54f54'
+          sha = os.environ['GITHUB_SHA']
+          original = {
+              '.github/workflows/probe-once.yml',
+              'README.md',
+              'probe.c',
+              'slot_contract.h',
+              'test_slot_contract.c',
+          }
+          component = {
+              '.gitignore',
+              'Makefile',
+              'README.md',
+              'docs/INTEGRATION_GATES.md',
+              'docs/VALIDATION.md',
+              'include/thread_context.h',
+              'include/thread_context_backend.h',
+              'review-tests/README.md',
+              'review-tests/cancel_transition.c',
+              'review-tests/cpp_backend.cpp',
+              'review-tests/run_review.sh',
+              'review-tests/stress.c',
+              'src/slot_candidate.h',
+              'src/thread_context.c',
+              'tests/test_cpp_linkage.cpp',
+              'tests/test_slot_candidate.c',
+              'tests/test_thread_context.c',
+          }
+          additions = {'thread-context/' + name for name in component}
+          additions.add('.github/workflows/context-once.yml')
+          expected = original | additions
+          parents = subprocess.check_output(
+              ['git', 'rev-list', '--parents', '-n', '1', sha], text=True).split()
+          if parents != [sha, base]:
+              raise SystemExit('Expected exactly one parent at the approved base.')
+          actual = set(subprocess.check_output(
+              ['git', 'ls-files', '-z']).decode().split('\0')) - {''}
+          if actual != expected or len(component) != 17:
+              raise SystemExit('Exact public source allowlist mismatch.')
+          changed = subprocess.check_output(
+              ['git', 'diff', '--name-status', '--no-renames', base, sha],
+              text=True).splitlines()
+          if set(changed) != {'A\t' + name for name in additions}:
+              raise SystemExit('Only the approved new files may change.')
+          for entry in subprocess.check_output(
+                  ['git', 'ls-tree', '-r', '-z', sha]).split(b'\0'):
+              if entry and entry.split(b' ', 1)[0] not in (b'100644', b'100755'):
+                  raise SystemExit('Only ordinary source files are allowed.')
+          print('source_boundary PASS: 17 component files, one new workflow, five unchanged originals')
+          PY
+
+      - name: Build strict owned macOS tests in both modes
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcrun --sdk macosx clang --version
+          xcrun --sdk macosx --show-sdk-version
+          cd thread-context
+          BUILD="$RUNNER_TEMP/owned-context-tests"
+          mkdir -p "$BUILD"
+          COMMON=(-O2 -Wall -Wextra -Werror -pedantic -arch arm64 -Iinclude -Isrc)
+          xcrun --sdk macosx clang -std=c11 "${COMMON[@]}" \
+            tests/test_slot_candidate.c -o "$BUILD/slot-candidate"
+          for MODE in 0 1; do
+            xcrun --sdk macosx clang -std=c11 "${COMMON[@]}" \
+              -DTC_ENABLE_DARWIN_DIAGNOSTIC="$MODE" \
+              -c src/thread_context.c -o "$BUILD/context-$MODE.o"
+            for SOURCE in tests/test_thread_context.c review-tests/stress.c review-tests/cancel_transition.c; do
+              NAME="$(basename "$SOURCE" .c)"
+              xcrun --sdk macosx clang -std=c11 "${COMMON[@]}" \
+                -DTC_ENABLE_DARWIN_DIAGNOSTIC="$MODE" \
+                "$SOURCE" "$BUILD/context-$MODE.o" -o "$BUILD/$NAME-$MODE"
+            done
+            for SOURCE in tests/test_cpp_linkage.cpp review-tests/cpp_backend.cpp; do
+              NAME="$(basename "$SOURCE" .cpp)"
+              xcrun --sdk macosx clang++ -std=c++17 "${COMMON[@]}" \
+                "$SOURCE" "$BUILD/context-$MODE.o" -o "$BUILD/$NAME-$MODE"
+            done
+          done
+
+      - name: Execute default pthread lifecycle tests
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+          build = Path(os.environ['RUNNER_TEMP']) / 'owned-context-tests'
+          subprocess.run([str(build / 'slot-candidate')], check=True, timeout=30)
+          for name in ('test_thread_context', 'stress', 'cancel_transition',
+                       'test_cpp_linkage', 'cpp_backend'):
+              subprocess.run([str(build / (name + '-0'))], check=True, timeout=60)
+          PY
+
+      - name: Execute opt-in diagnostic with portable lifecycle fallback
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+          build = Path(os.environ['RUNNER_TEMP']) / 'owned-context-tests'
+          for name in ('test_thread_context', 'stress', 'cancel_transition',
+                       'test_cpp_linkage', 'cpp_backend'):
+              subprocess.run([str(build / (name + '-1'))], check=True, timeout=60)
+          PY
+
+      - name: Compile iOS C and C++ objects only without execution
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          cd thread-context
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos --show-sdk-version
+          BUILD="$RUNNER_TEMP/owned-context-tests"
+          COMMON=(-O2 -Wall -Wextra -Werror -pedantic -target arm64-apple-ios15.0 -isysroot "$SDKROOT" -Iinclude -Isrc)
+          for MODE in 0 1; do
+            xcrun --sdk iphoneos clang -std=c11 "${COMMON[@]}" \
+              -DTC_ENABLE_DARWIN_DIAGNOSTIC="$MODE" \
+              -c src/thread_context.c -o "$BUILD/context-ios-$MODE.o"
+            xcrun --sdk iphoneos clang++ -std=c++17 "${COMMON[@]}" \
+              -DTC_ENABLE_DARWIN_DIAGNOSTIC="$MODE" \
+              -c tests/test_cpp_linkage.cpp -o "$BUILD/cpp-ios-$MODE.o"
+            file "$BUILD/context-ios-$MODE.o" "$BUILD/cpp-ios-$MODE.o"
+          done
+          printf '%s\n' 'iOS objects compiled only; no application link, signing, installation, or execution.'
